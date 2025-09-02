@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Product Viewer</title>
+    <style>
+      :root {
+        --bg-primary: #0a0f1c;
+        --bg-secondary: #0f1729;
+        --bg-card: linear-gradient(
+          145deg,
+          rgba(15, 23, 41, 0.8),
+          rgba(30, 41, 59, 0.4)
+        );
+        --text-primary: #f1f5f9;
+        --text-secondary: #94a3b8;
+        --text-muted: #64748b;
+        --accent-primary: #3b82f6;
+        --accent-secondary: #06b6d4;
+        --accent-gradient: linear-gradient(135deg, #3b82f6, #06b6d4);
+        --success: #10b981;
+        --warning: #f59e0b;
+        --glass: rgba(255, 255, 255, 0.05);
+        --glass-border: rgba(255, 255, 255, 0.1);
+        --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+        --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.5);
+        --border-radius: 16px;
+        --border-radius-sm: 12px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+          Roboto, sans-serif;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        line-height: 1.6;
+      }
+
+      body {
+        background: radial-gradient(
+            ellipse at top,
+            rgba(59, 130, 246, 0.05) 0%,
+            transparent 50%
+          ),
+          linear-gradient(
+            180deg,
+            var(--bg-primary) 0%,
+            var(--bg-secondary) 100%
+          );
+        min-height: 100vh;
+        padding: 24px;
+
+      }
+      .header {
+        text-align: center;
+        margin-bottom: 32px;
+      }
+
+      .header h1 {
+        margin: 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+        background: var(--accent-gradient);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 8px;
+      }
+
+      .header p {
+        color: var(--text-secondary);
+        margin: 0;
+        font-size: 1.1rem;
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: center;
+        margin-bottom: 24px;
+        padding: 20px;
+        background: var(--glass);
+        backdrop-filter: blur(10px);
+        border: 1px solid var(--glass-border);
+        border-radius: var(--border-radius);
+        box-shadow: var(--shadow-lg);
+      }
+
+      .upload-section {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        background: var(--accent-gradient);
+        border: none;
+        color: white;
+        padding: 12px 20px;
+        border-radius: var(--border-radius-sm);
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.95rem;
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .btn::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(255, 255, 255, 0.2),
+          transparent
+        );
+        transition: left 0.5s;
+      }
+
+      .btn:hover::before {
+        left: 100%;
+      }
+
+      .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-lg);
+      }
+
+      .btn-secondary {
+        background: rgba(71, 85, 105, 0.8);
+        backdrop-filter: blur(5px);
+      }
+
+      .btn-success {
+        background: linear-gradient(135deg, var(--success), #059669);
+      }
+
+      .search-container {
+        flex: 1;
+        min-width: 280px;
+        position: relative;
+      }
+
+      .search-input {
+        width: 100%;
+        padding: 12px 16px 12px 44px;
+        background: rgba(30, 41, 59, 0.6);
+        border: 1px solid var(--glass-border);
+        border-radius: var(--border-radius-sm);
+        color: var(--text-primary);
+        font-size: 1rem;
+        outline: none;
+        transition: all 0.3s ease;
+      }
+
+      .search-input:focus {
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+      }
+
+      .search-icon {
+        position: absolute;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-muted);
+        font-size: 1.1rem;
+      }
+
+      .info-bar {
+        background: rgba(16, 185, 129, 0.1);
+        border: 1px solid rgba(16, 185, 129, 0.2);
+        color: var(--success);
+        padding: 12px 20px;
+        border-radius: var(--border-radius-sm);
+        margin-bottom: 24px;
+        font-weight: 500;
+      }
+
+      .card-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+        gap: 24px;
+      }
+
+      .card {
+        background: var(--bg-card);
+        backdrop-filter: blur(10px);
+        border: 1px solid var(--glass-border);
+        border-radius: var(--border-radius);
+        overflow: hidden;
+        transition: all 0.4s ease;
+        position: relative;
+        box-shadow: var(--shadow-sm);
+      }
+
+      .card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: var(--accent-gradient);
+        transform: scaleX(0);
+        transition: transform 0.3s ease;
+      }
+
+      .card:hover::before {
+        transform: scaleX(1);
+      }
+
+      .card:hover {
+        transform: translateY(-8px);
+        box-shadow: var(--shadow-lg);
+        border-color: rgba(59, 130, 246, 0.3);
+      }
+
+      .card-header {
+        padding: 20px 20px 16px;
+      }
+
+      .product-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin: 0 0 8px;
+        line-height: 1.3;
+      }
+
+      .product-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .product-code {
+        background: rgba(59, 130, 246, 0.1);
+        color: var(--accent-primary);
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        font-family: "Courier New", monospace;
+      }
+
+      .product-price {
+        color: var(--success);
+        font-weight: 600;
+        font-size: 1.1rem;
+      }
+
+      .page-badge {
+        background: rgba(100, 116, 139, 0.2);
+        color: var(--text-secondary);
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        margin-left: auto;
+      }
+
+      .carousel-container {
+        position: relative;
+        background: rgba(0, 0, 0, 0.3);
+        height: 240px;
+        overflow: hidden;
+      }
+
+      .carousel {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+      }
+
+      .carousel img {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+        border-radius: 8px;
+      }
+
+      .carousel-nav {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        background: rgba(0, 0, 0, 0.7);
+        border: none;
+        color: white;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        cursor: pointer;
+        font-size: 1.2rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+        backdrop-filter: blur(5px);
+      }
+
+      .carousel-nav:hover {
+        background: rgba(0, 0, 0, 0.8);
+        transform: translateY(-50%) scale(1.1);
+      }
+
+      .carousel-nav.prev {
+        left: 12px;
+      }
+
+      .carousel-nav.next {
+        right: 12px;
+      }
+
+      .carousel-indicators {
+        position: absolute;
+        bottom: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 6px;
+      }
+
+      .carousel-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.5);
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .carousel-dot.active {
+        background: white;
+        transform: scale(1.3);
+      }
+
+      .thumbnails {
+        padding: 12px 16px;
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        background: rgba(0, 0, 0, 0.1);
+      }
+
+      .thumbnail {
+        width: 60px;
+        height: 60px;
+        border-radius: 8px;
+        overflow: hidden;
+        flex-shrink: 0;
+        cursor: pointer;
+        border: 2px solid transparent;
+        transition: all 0.2s ease;
+      }
+
+      .thumbnail img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .thumbnail:hover,
+      .thumbnail.active {
+        border-color: var(--accent-primary);
+        transform: scale(1.05);
+      }
+
+      .card-content {
+        padding: 0 20px 16px;
+      }
+
+      .description {
+        color: var(--text-secondary);
+        margin-bottom: 16px;
+        line-height: 1.6;
+      }
+
+      .tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .tag {
+        background: rgba(100, 116, 139, 0.2);
+        color: var(--text-secondary);
+        padding: 6px 12px;
+        border-radius: 16px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        transition: all 0.2s ease;
+      }
+
+      .tag:hover {
+        background: rgba(59, 130, 246, 0.2);
+        color: var(--accent-primary);
+      }
+
+      .card-footer {
+        padding: 16px 20px 20px;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      .coordinates-info {
+        background: rgba(100, 116, 139, 0.1);
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        font-family: "Courier New", monospace;
+      }
+
+      .placeholder {
+        grid-column: 1 / -1;
+        text-align: center;
+        padding: 80px 40px;
+        background: var(--glass);
+        border: 2px dashed var(--glass-border);
+        border-radius: var(--border-radius);
+        backdrop-filter: blur(10px);
+      }
+
+      .placeholder h2 {
+        font-size: 2rem;
+        margin-bottom: 16px;
+        background: var(--accent-gradient);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+
+      .placeholder p {
+        color: var(--text-secondary);
+        font-size: 1.1rem;
+        margin-bottom: 12px;
+      }
+
+      .no-image {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        color: var(--text-muted);
+        font-size: 1.1rem;
+        background: rgba(100, 116, 139, 0.1);
+      }
+
+      /* Scrollbar styling */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: rgba(100, 116, 139, 0.1);
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: rgba(100, 116, 139, 0.3);
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(100, 116, 139, 0.5);
+      }
+
+      /* Responsive */
+      @media (max-width: 768px) {
+        body {
+          padding: 16px;
+        }
+
+        .header h1 {
+          font-size: 2rem;
+        }
+
+        .toolbar {
+          padding: 16px;
+        }
+
+        .upload-section {
+          width: 100%;
+          justify-content: center;
+        }
+
+        .card-grid {
+          grid-template-columns: 1fr;
+          gap: 20px;
+        }
+
+        .carousel-container {
+          height: 200px;
+        }
+      }
+
+      /* Loading animation */
+      .loading {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 2px solid var(--glass-border);
+        border-radius: 50%;
+        border-top-color: var(--accent-primary);
+        animation: spin 1s ease-in-out infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* Fade in animation for cards */
+      .card {
+        animation: fadeInUp 0.5s ease-out forwards;
+        opacity: 0;
+        transform: translateY(20px);
+      }
+
+      @keyframes fadeInUp {
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .card:nth-child(n) {
+        animation-delay: calc(0.1s * var(--card-index, 0));
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <p>Product Catalog Viewer</p>
+    </div>
+
+    <div class="toolbar">
+      <div class="upload-section">
+        <label class="btn">
+          📁 Choose JSON
+          <input
+            id="jsonInput"
+            type="file"
+            accept="application/json"
+            style="display: none"
+          />
+        </label>
+        <!-- <label class="btn btn-secondary">
+          🖼️ Select Images Folder
+          <input
+            id="imagesFolder"
+            type="file"
+            webkitdirectory
+            directory
+            multiple
+            style="display: none"
+          />
+        </label> -->
+        <!-- <button id="loadSample" class="btn btn-success">
+          ✨ Load Sample Data
+        </button> -->
+      </div>
+
+      <div class="search-container">
+        <span class="search-icon">🔍</span>
+        <input
+          id="searchBox"
+          class="search-input"
+          placeholder="Search products, codes, descriptions..."
+        />
+      </div>
+
+      <button id="clearBtn" class="btn btn-secondary">🗑️ Clear</button>
+    </div>
+
+    <div id="infoArea" class="info-bar" style="display: none">
+      No data loaded yet.
+    </div>
+
+    <div id="main" class="card-grid">
+      <div class="placeholder">
+        <h2>Welcome to Product Viewer</h2>
+        <p>Load your Villeroy & Boch product JSON file to get started</p>
+        <p style="color: var(--text-muted); font-size: 0.95rem">
+          Supports product catalogs with images, descriptions, and detailed
+          specifications
+        </p>
+      </div>
+    </div>
+
+    <script>
+      const jsonInput = document.getElementById("jsonInput");
+    //   const imagesFolder = document.getElementById("imagesFolder");
+      const main = document.getElementById("main");
+      const infoArea = document.getElementById("infoArea");
+      const searchBox = document.getElementById("searchBox");
+      const clearBtn = document.getElementById("clearBtn");
+    //   const loadSample = document.getElementById("loadSample");
+
+      let products = [];
+      let filteredProducts = [];
+      let fileImageMap = {};
+
+      function showInfo(text, type = "info") {
+        infoArea.textContent = text;
+        infoArea.style.display = "block";
+        infoArea.className = `info-bar ${type}`;
+      }
+
+      function hideInfo() {
+        infoArea.style.display = "none";
+      }
+
+      function resolveImagePath(imagePath) {
+        if (!imagePath) return "";
+
+        // Handle data URLs and absolute URLs
+        if (imagePath.startsWith("data:") || imagePath.startsWith("http")) {
+          return imagePath;
+        }
+
+        // Try to resolve from file map
+        const filename = imagePath.split("/").pop();
+        if (fileImageMap[filename]) {
+          return URL.createObjectURL(fileImageMap[filename]);
+        }
+
+        return imagePath; // Return as-is, might work if relative to HTML
+      }
+
+      function createImageCarousel(images, productTitle) {
+        if (!images || images.length === 0) {
+          return '<div class="no-image">No images available</div>';
+        }
+
+        const resolvedImages = images
+          .map((img) => resolveImagePath(img))
+          .filter(Boolean);
+        if (resolvedImages.length === 0) {
+          return '<div class="no-image">Images not found</div>';
+        }
+
+        let currentIndex = 0;
+        const carouselId =
+          "carousel_" + Math.random().toString(36).substr(2, 9);
+
+        const html = `
+          <div class="carousel-container">
+            <div class="carousel" id="${carouselId}">
+              <img src="${resolvedImages[0]}" alt="${productTitle}" />
+              ${
+                resolvedImages.length > 1
+                  ? `
+                <button class="carousel-nav prev" onclick="navigateCarousel('${carouselId}', -1)">‹</button>
+                <button class="carousel-nav next" onclick="navigateCarousel('${carouselId}', 1)">›</button>
+                <div class="carousel-indicators">
+                  ${resolvedImages
+                    .map(
+                      (_, i) =>
+                        `<div class="carousel-dot ${
+                          i === 0 ? "active" : ""
+                        }" onclick="goToSlide('${carouselId}', ${i})"></div>`
+                    )
+                    .join("")}
+                </div>
+              `
+                  : ""
+              }
+            </div>
+            ${
+              resolvedImages.length > 1
+                ? `
+              <div class="thumbnails">
+                ${resolvedImages
+                  .map(
+                    (img, i) =>
+                      `<div class="thumbnail ${
+                        i === 0 ? "active" : ""
+                      }" onclick="goToSlide('${carouselId}', ${i})">
+                    <img src="${img}" alt="Thumbnail ${i + 1}" />
+                  </div>`
+                  )
+                  .join("")}
+              </div>
+            `
+                : ""
+            }
+          </div>
+        `;
+
+        // Store carousel data
+        window.carouselData = window.carouselData || {};
+        window.carouselData[carouselId] = {
+          images: resolvedImages,
+          currentIndex: 0,
+        };
+
+        return html;
+      }
+
+      window.navigateCarousel = function (carouselId, direction) {
+        const data = window.carouselData[carouselId];
+        if (!data) return;
+
+        data.currentIndex += direction;
+        if (data.currentIndex < 0) data.currentIndex = data.images.length - 1;
+        if (data.currentIndex >= data.images.length) data.currentIndex = 0;
+
+        updateCarousel(carouselId);
+      };
+
+      window.goToSlide = function (carouselId, index) {
+        const data = window.carouselData[carouselId];
+        if (!data) return;
+
+        data.currentIndex = index;
+        updateCarousel(carouselId);
+      };
+
+      function updateCarousel(carouselId) {
+        const data = window.carouselData[carouselId];
+        const carousel = document.getElementById(carouselId);
+        if (!carousel || !data) return;
+
+        const img = carousel.querySelector("img");
+        const dots = carousel.querySelectorAll(".carousel-dot");
+        const thumbs = carousel.parentElement.querySelectorAll(".thumbnail");
+
+        img.src = data.images[data.currentIndex];
+
+        dots.forEach((dot, i) => {
+          dot.classList.toggle("active", i === data.currentIndex);
+        });
+
+        thumbs.forEach((thumb, i) => {
+          thumb.classList.toggle("active", i === data.currentIndex);
+        });
+      }
+
+      function createProductCard(product, index) {
+        const images = product.images || [];
+        const styleTagsHtml =
+          product.style_tags && product.style_tags.length > 0
+            ? `<div class="tags">${product.style_tags
+                .map((tag) => `<span class="tag">${tag}</span>`)
+                .join("")}</div>`
+            : "";
+
+        const coordinatesInfo =
+          product.coordinates &&
+          (product.coordinates.image_areas || product.coordinates.text_areas)
+            ? `<div class="coordinates-info">
+               <strong>Coordinates:</strong><br>
+               ${
+                 product.coordinates.image_areas
+                   ? `Images: ${product.coordinates.image_areas.join(", ")}<br>`
+                   : ""
+               }
+               ${
+                 product.coordinates.text_areas
+                   ? `Text: ${product.coordinates.text_areas.join(", ")}`
+                   : ""
+               }
+             </div>`
+            : "";
+
+        return `
+          <div class="card" style="--card-index: ${index}">
+            <div class="card-header">
+              <h3 class="product-title">${
+                product.title || "Untitled Product"
+              }</h3>
+              <div class="product-meta">
+                ${
+                  product.product_code
+                    ? `<span class="product-code">${product.product_code}</span>`
+                    : ""
+                }
+                ${
+                  product.price
+                    ? `<span class="product-price">${product.price}</span>`
+                    : ""
+                }
+                ${
+                  product.page_number
+                    ? `<span class="page-badge">Page ${product.page_number}</span>`
+                    : ""
+                }
+              </div>
+            </div>
+            
+            ${createImageCarousel(images, product.title)}
+            
+            <div class="card-content">
+                <p>Orignal Description</p>
+              ${
+                product.description
+                  ? `<div class="description">${product.description}</div>`
+                  : ""
+              }
+            </div>
+
+            <div class="card-content">
+                <p>Ai Description</p>
+              ${
+                product.ai_description
+                  ? `<div class="description">${product.ai_description}</div>`
+                  : ""
+              }
+              ${styleTagsHtml}
+            </div>
+            
+            
+          </div>
+        `;
+      }
+
+      function renderProducts(productsToRender = products) {
+        main.innerHTML = "";
+
+        if (productsToRender.length === 0) {
+          main.innerHTML = `
+            <div class="placeholder">
+              <h2>${
+                products.length === 0 ? "No Data Loaded" : "No Results Found"
+              }</h2>
+              <p>${
+                products.length === 0
+                  ? "Please load a JSON file to view products"
+                  : "Try adjusting your search terms"
+              }</p>
+            </div>
+          `;
+          return;
+        }
+
+        const cardsHtml = productsToRender
+          .map((product, index) => createProductCard(product, index))
+          .join("");
+        main.innerHTML = cardsHtml;
+
+        showInfo(
+          `Showing ${productsToRender.length} of ${products.length} products`
+        );
+      }
+
+      function filterProducts(query) {
+        if (!query.trim()) {
+          filteredProducts = [...products];
+        } else {
+          const searchTerm = query.toLowerCase();
+          filteredProducts = products.filter((product) => {
+            const searchableText = [
+              product.title,
+              product.product_code,
+              product.description,
+              ...(product.style_tags || []),
+              ...(product.text_content || []),
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase();
+
+            return searchableText.includes(searchTerm);
+          });
+        }
+        renderProducts(filteredProducts);
+      }
+
+      // Event Listeners
+      jsonInput.addEventListener("change", async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        try {
+          const text = await file.text();
+          const data = JSON.parse(text);
+
+          // Handle your specific JSON structure
+          products = Array.isArray(data) ? data : [data];
+          filteredProducts = [...products];
+
+          renderProducts();
+          showInfo(
+            `Successfully loaded ${products.length} products from ${file.name}`
+          );
+        } catch (error) {
+          showInfo(`Error loading JSON: ${error.message}`, "error");
+          console.error("JSON parsing error:", error);
+        }
+      });
+
+    //   imagesFolder.addEventListener("change", (e) => {
+    //     const files = Array.from(e.target.files || []);
+    //     fileImageMap = {};
+
+    //     files.forEach((file) => {
+    //       fileImageMap[file.name] = file;
+    //     });
+
+    //     if (products.length > 0) {
+    //       renderProducts(filteredProducts);
+    //     }
+
+    //     showInfo(`Loaded ${files.length} image files`);
+    //   });
+
+      searchBox.addEventListener("input", (e) => {
+        filterProducts(e.target.value);
+      });
+
+      clearBtn.addEventListener("click", () => {
+        products = [];
+        filteredProducts = [];
+        fileImageMap = {};
+        window.carouselData = {};
+        jsonInput.value = "";
+        // imagesFolder.value = "";
+        searchBox.value = "";
+        renderProducts();
+        hideInfo();
+      });
+
+    //   loadSample.addEventListener("click", () => {
+    //     // Load the sample data from the first document
+    //     const sampleData = JSON.parse(
+    //       document.querySelector('[index="1"]').textContent
+    //     );
+    //     products = sampleData;
+    //     filteredProducts = [...products];
+    //     showInfo(`Loaded ${products.length} sample products`);
+    //     renderProducts();
+    //   });
+
+      // Keyboard shortcuts
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "o") {
+          e.preventDefault();
+          jsonInput.click();
+        }
+      });
+
+      // Drag and drop support
+      document.addEventListener("dragover", (e) => e.preventDefault());
+      document.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const files = Array.from(e.dataTransfer.files);
+        const jsonFile = files.find((f) =>
+          f.name.toLowerCase().endsWith(".json")
+        );
+
+        if (jsonFile) {
+          const dataTransfer = new DataTransfer();
+          dataTransfer.items.add(jsonFile);
+          jsonInput.files = dataTransfer.files;
+          jsonInput.dispatchEvent(new Event("change"));
+        }
+      });
+    </script>
+  </body>
+</html>
