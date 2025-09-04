@@ -10,8 +10,8 @@
         --bg-secondary: #0f1729;
         --bg-card: linear-gradient(
           145deg,
-          rgba(15, 23, 41, 0.8),
-          rgba(30, 41, 59, 0.4)
+          rgba(15, 23, 41, 0.9),
+          rgba(30, 41, 59, 0.6)
         );
         --text-primary: #f1f5f9;
         --text-secondary: #94a3b8;
@@ -21,12 +21,16 @@
         --accent-gradient: linear-gradient(135deg, #3b82f6, #06b6d4);
         --success: #10b981;
         --warning: #f59e0b;
-        --glass: rgba(255, 255, 255, 0.05);
-        --glass-border: rgba(255, 255, 255, 0.1);
-        --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
-        --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.5);
-        --border-radius: 16px;
-        --border-radius-sm: 12px;
+        --error: #ef4444;
+        --purple: #8b5cf6;
+        --pink: #ec4899;
+        --glass: rgba(255, 255, 255, 0.08);
+        --glass-border: rgba(255, 255, 255, 0.15);
+        --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+        --shadow-lg: 0 15px 35px rgba(0, 0, 0, 0.6);
+        --border-radius: 20px;
+        --border-radius-sm: 14px;
+        --border-radius-xs: 8px;
       }
 
       * {
@@ -48,7 +52,12 @@
       body {
         background: radial-gradient(
             ellipse at top,
-            rgba(59, 130, 246, 0.05) 0%,
+            rgba(59, 130, 246, 0.08) 0%,
+            transparent 50%
+          ),
+          radial-gradient(
+            ellipse at bottom right,
+            rgba(139, 92, 246, 0.05) 0%,
             transparent 50%
           ),
           linear-gradient(
@@ -58,7 +67,6 @@
           );
         min-height: 100vh;
         padding: 24px;
-
       }
       .header {
         text-align: center;
@@ -549,11 +557,286 @@
       .card:nth-child(n) {
         animation-delay: calc(0.1s * var(--card-index, 0));
       }
+
+      /* New styles for product details */
+      .colors-section,
+      .color-variants-section,
+      .product-section {
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      .colors-section h4,
+      .color-variants-section h4,
+      .product-section h4 {
+        font-size: 1rem;
+        color: var(--text-primary);
+        margin-bottom: 8px;
+      }
+
+      .color-list,
+      .color-variants-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .color-item,
+      .color-variant-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .color-name,
+      .variant-color {
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .color-code,
+      .variant-price,
+      .variant-size {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+      }
+
+      .rich-content {
+        color: var(--text-secondary);
+        line-height: 1.8;
+      }
+
+             .variant-image {
+         width: 60px;
+         height: 60px;
+         object-fit: cover;
+         border-radius: 8px;
+       }
+
+       .materials {
+         margin-bottom: 16px;
+         padding: 12px;
+         background: rgba(59, 130, 246, 0.05);
+         border-radius: 8px;
+         border-left: 3px solid var(--accent-primary);
+       }
+
+       .color-item {
+         background: rgba(255, 255, 255, 0.05);
+         padding: 8px 12px;
+         border-radius: 8px;
+         border: 1px solid rgba(255, 255, 255, 0.1);
+       }
+
+       .color-variant-item {
+         background: rgba(255, 255, 255, 0.05);
+         padding: 12px;
+         border-radius: 8px;
+         border: 1px solid rgba(255, 255, 255, 0.1);
+         flex-direction: column;
+         align-items: flex-start;
+         gap: 8px;
+       }
+
+       .variant-info {
+         display: flex;
+         flex-wrap: wrap;
+         gap: 8px;
+         align-items: center;
+       }
+
+       .rich-content {
+         background: rgba(255, 255, 255, 0.02);
+         padding: 12px;
+         border-radius: 8px;
+         border: 1px solid rgba(255, 255, 255, 0.05);
+       }
+
+       .rich-content p {
+         margin: 0 0 8px 0;
+       }
+
+       .rich-content p:last-child {
+         margin-bottom: 0;
+       }
+
+       /* Category and Sub-category styles */
+       .category-section {
+         margin-bottom: 16px;
+         padding: 12px 16px;
+         background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.05));
+         border-radius: var(--border-radius-sm);
+         border: 1px solid rgba(59, 130, 246, 0.2);
+         position: relative;
+         overflow: hidden;
+       }
+
+       .category-section::before {
+         content: '';
+         position: absolute;
+         top: 0;
+         left: 0;
+         right: 0;
+         height: 2px;
+         background: var(--accent-gradient);
+       }
+
+       .category-header {
+         display: flex;
+         align-items: center;
+         gap: 8px;
+         margin-bottom: 8px;
+       }
+
+       .category-icon {
+         font-size: 1.1rem;
+         color: var(--accent-primary);
+       }
+
+       .category-title {
+         font-size: 0.9rem;
+         font-weight: 600;
+         color: var(--text-primary);
+         text-transform: uppercase;
+         letter-spacing: 0.5px;
+       }
+
+       .category-badge {
+         display: inline-block;
+         background: var(--accent-gradient);
+         color: white;
+         padding: 6px 12px;
+         border-radius: 20px;
+         font-size: 0.85rem;
+         font-weight: 600;
+         margin-right: 8px;
+         margin-bottom: 6px;
+         box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+         transition: all 0.3s ease;
+       }
+
+       .category-badge:hover {
+         transform: translateY(-2px);
+         box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+       }
+
+       .sub-category-badge {
+         display: inline-block;
+         background: linear-gradient(135deg, var(--purple), var(--pink));
+         color: white;
+         padding: 4px 10px;
+         border-radius: 16px;
+         font-size: 0.8rem;
+         font-weight: 500;
+         margin-right: 6px;
+         margin-bottom: 4px;
+         box-shadow: 0 2px 6px rgba(139, 92, 246, 0.3);
+         transition: all 0.3s ease;
+       }
+
+       .sub-category-badge:hover {
+         transform: translateY(-1px);
+         box-shadow: 0 3px 10px rgba(139, 92, 246, 0.4);
+       }
+
+       .category-info {
+         display: flex;
+         flex-wrap: wrap;
+         gap: 8px;
+         align-items: center;
+       }
+
+       .category-label {
+         font-size: 0.8rem;
+         color: var(--text-muted);
+         font-weight: 500;
+         text-transform: uppercase;
+         letter-spacing: 0.5px;
+       }
+
+       /* Enhanced card hover effects */
+       .card:hover .category-badge {
+         transform: translateY(-2px) scale(1.05);
+       }
+
+       .card:hover .sub-category-badge {
+         transform: translateY(-1px) scale(1.05);
+       }
+
+       /* Filter section styles */
+       .filter-section {
+         display: flex;
+         gap: 12px;
+         align-items: center;
+         flex-wrap: wrap;
+         margin-bottom: 20px;
+         padding: 16px 20px;
+         background: var(--glass);
+         backdrop-filter: blur(10px);
+         border: 1px solid var(--glass-border);
+         border-radius: var(--border-radius);
+         box-shadow: var(--shadow-sm);
+       }
+
+       .filter-label {
+         font-size: 0.9rem;
+         font-weight: 600;
+         color: var(--text-primary);
+         margin-right: 8px;
+       }
+
+       .filter-select {
+         background: rgba(30, 41, 59, 0.8);
+         border: 1px solid var(--glass-border);
+         border-radius: var(--border-radius-xs);
+         color: var(--text-primary);
+         padding: 8px 12px;
+         font-size: 0.9rem;
+         outline: none;
+         transition: all 0.3s ease;
+         min-width: 150px;
+       }
+
+       .filter-select:focus {
+         border-color: var(--accent-primary);
+         box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+       }
+
+       .filter-select option {
+         background: var(--bg-secondary);
+         color: var(--text-primary);
+       }
+
+       .stats-bar {
+         display: flex;
+         gap: 16px;
+         align-items: center;
+         margin-bottom: 20px;
+         padding: 12px 20px;
+         background: rgba(16, 185, 129, 0.1);
+         border: 1px solid rgba(16, 185, 129, 0.2);
+         border-radius: var(--border-radius-sm);
+         color: var(--success);
+         font-weight: 500;
+         font-size: 0.9rem;
+       }
+
+       .stat-item {
+         display: flex;
+         align-items: center;
+         gap: 6px;
+       }
+
+       .stat-icon {
+         font-size: 1rem;
+       }
     </style>
   </head>
   <body>
     <div class="header">
-      <p>Product Catalog Viewer</p>
+      <h1>Product Catalog Viewer</h1>
+      <p>View and explore your product catalog with rich details</p>
     </div>
 
     <div class="toolbar">
@@ -599,13 +882,39 @@
       No data loaded yet.
     </div>
 
+    <div id="statsBar" class="stats-bar" style="display: none">
+      <div class="stat-item">
+        <span class="stat-icon">📦</span>
+        <span id="totalProducts">0</span> Products
+      </div>
+      <div class="stat-item">
+        <span class="stat-icon">🏷️</span>
+        <span id="totalCategories">0</span> Categories
+      </div>
+      <div class="stat-item">
+        <span class="stat-icon">🔍</span>
+        <span id="filteredCount">0</span> Showing
+      </div>
+    </div>
+
+    <div id="filterSection" class="filter-section" style="display: none">
+      <span class="filter-label">Filter by Category:</span>
+      <select id="categoryFilter" class="filter-select">
+        <option value="">All Categories</option>
+      </select>
+      <span class="filter-label">Sub-category:</span>
+      <select id="subCategoryFilter" class="filter-select">
+        <option value="">All Sub-categories</option>
+      </select>
+      <button id="clearFilters" class="btn btn-secondary">Clear Filters</button>
+    </div>
+
     <div id="main" class="card-grid">
       <div class="placeholder">
         <h2>Welcome to Product Viewer</h2>
-        <p>Load your Villeroy & Boch product JSON file to get started</p>
+        <p>Load your product JSON file to get started</p>
         <p style="color: var(--text-muted); font-size: 0.95rem">
-          Supports product catalogs with images, descriptions, and detailed
-          specifications
+          Supports product catalogs with images, colors, variants, features, dimensions, and specifications
         </p>
       </div>
     </div>
@@ -617,11 +926,21 @@
       const infoArea = document.getElementById("infoArea");
       const searchBox = document.getElementById("searchBox");
       const clearBtn = document.getElementById("clearBtn");
+      const statsBar = document.getElementById("statsBar");
+      const filterSection = document.getElementById("filterSection");
+      const categoryFilter = document.getElementById("categoryFilter");
+      const subCategoryFilter = document.getElementById("subCategoryFilter");
+      const clearFilters = document.getElementById("clearFilters");
+      const totalProducts = document.getElementById("totalProducts");
+      const totalCategories = document.getElementById("totalCategories");
+      const filteredCount = document.getElementById("filteredCount");
     //   const loadSample = document.getElementById("loadSample");
 
       let products = [];
       let filteredProducts = [];
       let fileImageMap = {};
+      let allCategories = new Set();
+      let allSubCategories = new Set();
 
       function showInfo(text, type = "info") {
         infoArea.textContent = text;
@@ -760,79 +1079,112 @@
       }
 
       function createProductCard(product, index) {
-        const images = product.images || [];
-        const styleTagsHtml =
-          product.style_tags && product.style_tags.length > 0
-            ? `<div class="tags">${product.style_tags
-                .map((tag) => `<span class="tag">${tag}</span>`)
-                .join("")}</div>`
-            : "";
+        // Handle the new JSON format
+        const productName = product.name || "Untitled Product";
+        const productPrice = product.price || 0.00;
+        const productSlug = product.slug || "";
+        const shortDescription = product.short_description || "";
+        const productMaterials = product.product_materials || "";
+        const category = product.category || "";
+        const subCategory = product.sub_category || "";
+        
+        // Handle multiple images (image1 through image5)
+        const images = [];
+        for (let i = 1; i <= 5; i++) {
+          const imageKey = `image${i}`;
+          if (product[imageKey] && product[imageKey] !== "image_file_path_" + i) {
+            images.push(product[imageKey]);
+          }
+        }
 
-        const coordinatesInfo =
-          product.coordinates &&
-          (product.coordinates.image_areas || product.coordinates.text_areas)
-            ? `<div class="coordinates-info">
-               <strong>Coordinates:</strong><br>
-               ${
-                 product.coordinates.image_areas
-                   ? `Images: ${product.coordinates.image_areas.join(", ")}<br>`
-                   : ""
-               }
-               ${
-                 product.coordinates.text_areas
-                   ? `Text: ${product.coordinates.text_areas.join(", ")}`
-                   : ""
-               }
+        // Create category section
+        const categoryHtml = (category || subCategory) ? 
+          `<div class="category-section">
+             <div class="category-header">
+               <span class="category-icon">🏷️</span>
+               <span class="category-title">Classification</span>
+             </div>
+             <div class="category-info">
+               ${category ? `<span class="category-badge">${category}</span>` : ''}
+               ${subCategory ? `<span class="sub-category-badge">${subCategory}</span>` : ''}
+             </div>
+           </div>` : "";
+
+        // Handle product colors
+        const colorsHtml = product.product_colors && product.product_colors.length > 0
+          ? `<div class="colors-section">
+               <h4>Product Colors:</h4>
+               <div class="color-list">
+                 ${product.product_colors.map(color => 
+                   `<div class="color-item">
+                      <span class="color-name">${color.name || 'Unknown'}</span>
+                      ${color.code ? `<span class="color-code" style="background-color: ${color.code}; height: 15px; width: 15px; border-radius: 50%;"></span>` : ''}
+                    </div>`
+                 ).join('')}
+               </div>
              </div>`
-            : "";
+          : "";
+
+        // Handle product color images with variants
+        const colorVariantsHtml = product.product_color_image && product.product_color_image.length > 0
+          ? `<div class="color-variants-section">
+               <h4>Color Variants:</h4>
+               <div class="color-variants-list">
+                 ${product.product_color_image.map(variant => 
+                   `<div class="color-variant-item">
+                      <div class="variant-info">
+                        <span class="variant-color">${variant.product_color || 'Unknown'}</span>
+                        ${variant.product_color_price ? `<span class="variant-price">$${variant.product_color_price}</span>` : ''}
+                        ${variant.product_color_size ? `<span class="variant-size">${variant.product_color_size}</span>` : ''}
+                      </div>
+                      ${variant.product_color_image ? `<img src="${variant.product_color_image}" alt="${variant.product_color}" class="variant-image" />` : ''}
+                    </div>`
+                 ).join('')}
+               </div>
+             </div>`
+          : "";
+
+        // Handle product features, dimensions, and specifications
+        const featuresHtml = product.product_features ? 
+          `<div class="product-section">
+             <h4>Features:</h4>
+             <div class="rich-content">${product.product_features}</div>
+           </div>` : "";
+
+        const dimensionsHtml = product.product_dimensions ? 
+          `<div class="product-section">
+             <h4>Dimensions:</h4>
+             <div class="rich-content">${product.product_dimensions}</div>
+           </div>` : "";
+
+        const specificationsHtml = product.product_specifications ? 
+          `<div class="product-section">
+             <h4>Specifications:</h4>
+             <div class="rich-content">${product.product_specifications}</div>
+           </div>` : "";
 
         return `
           <div class="card" style="--card-index: ${index}">
             <div class="card-header">
-              <h3 class="product-title">${
-                product.title || "Untitled Product"
-              }</h3>
+              <h3 class="product-title">${productName}</h3>
               <div class="product-meta">
-                ${
-                  product.product_code
-                    ? `<span class="product-code">${product.product_code}</span>`
-                    : ""
-                }
-                ${
-                  product.price
-                    ? `<span class="product-price">${product.price}</span>`
-                    : ""
-                }
-                ${
-                  product.page_number
-                    ? `<span class="page-badge">Page ${product.page_number}</span>`
-                    : ""
-                }
+                ${productSlug ? `<span class="product-code">${productSlug}</span>` : ""}
+                <span class="product-price">$${productPrice.toFixed(2)}</span>
               </div>
             </div>
             
-            ${createImageCarousel(images, product.title)}
+            ${createImageCarousel(images, productName)}
             
             <div class="card-content">
-                <p>Orignal Description</p>
-              ${
-                product.description
-                  ? `<div class="description">${product.description}</div>`
-                  : ""
-              }
+              ${categoryHtml}
+              ${shortDescription ? `<div class="description"><strong>Description:</strong> ${shortDescription}</div>` : ""}
+              ${productMaterials ? `<div class="materials"><strong>Materials:</strong> ${productMaterials}</div>` : ""}
+              ${colorsHtml}
+              ${colorVariantsHtml}
+              ${featuresHtml}
+              ${dimensionsHtml}
+              ${specificationsHtml}
             </div>
-
-            <div class="card-content">
-                <p>Ai Description</p>
-              ${
-                product.ai_description
-                  ? `<div class="description">${product.ai_description}</div>`
-                  : ""
-              }
-              ${styleTagsHtml}
-            </div>
-            
-            
           </div>
         `;
       }
@@ -866,18 +1218,51 @@
         );
       }
 
-      function filterProducts(query) {
-        if (!query.trim()) {
-          filteredProducts = [...products];
+      function updateStatistics() {
+        totalProducts.textContent = products.length;
+        totalCategories.textContent = allCategories.size;
+        filteredCount.textContent = filteredProducts.length;
+        
+        if (products.length > 0) {
+          statsBar.style.display = 'flex';
+          filterSection.style.display = 'flex';
         } else {
+          statsBar.style.display = 'none';
+          filterSection.style.display = 'none';
+        }
+      }
+
+      function updateCategoryFilters() {
+        // Update category filter
+        const categoryOptions = Array.from(allCategories).sort();
+        categoryFilter.innerHTML = '<option value="">All Categories</option>' +
+          categoryOptions.map(cat => `<option value="${cat}">${cat}</option>`).join('');
+
+        // Update sub-category filter
+        const subCategoryOptions = Array.from(allSubCategories).sort();
+        subCategoryFilter.innerHTML = '<option value="">All Sub-categories</option>' +
+          subCategoryOptions.map(subCat => `<option value="${subCat}">${subCat}</option>`).join('');
+      }
+
+      function filterProducts(query, categoryFilterValue = "", subCategoryFilterValue = "") {
+        let filtered = [...products];
+
+        // Apply text search filter
+        if (query && query.trim()) {
           const searchTerm = query.toLowerCase();
-          filteredProducts = products.filter((product) => {
+          filtered = filtered.filter((product) => {
             const searchableText = [
-              product.title,
-              product.product_code,
-              product.description,
-              ...(product.style_tags || []),
-              ...(product.text_content || []),
+              product.name,
+              product.slug,
+              product.short_description,
+              product.product_materials,
+              product.category,
+              product.sub_category,
+              ...(product.product_colors || []).map(color => color.name),
+              ...(product.product_color_image || []).map(variant => variant.product_color),
+              product.product_features,
+              product.product_dimensions,
+              product.product_specifications
             ]
               .filter(Boolean)
               .join(" ")
@@ -886,7 +1271,20 @@
             return searchableText.includes(searchTerm);
           });
         }
+
+        // Apply category filter
+        if (categoryFilterValue) {
+          filtered = filtered.filter(product => product.category === categoryFilterValue);
+        }
+
+        // Apply sub-category filter
+        if (subCategoryFilterValue) {
+          filtered = filtered.filter(product => product.sub_category === subCategoryFilterValue);
+        }
+
+        filteredProducts = filtered;
         renderProducts(filteredProducts);
+        updateStatistics();
       }
 
       // Event Listeners
@@ -902,6 +1300,16 @@
           products = Array.isArray(data) ? data : [data];
           filteredProducts = [...products];
 
+          // Extract categories and sub-categories
+          allCategories.clear();
+          allSubCategories.clear();
+          products.forEach(product => {
+            if (product.category) allCategories.add(product.category);
+            if (product.sub_category) allSubCategories.add(product.sub_category);
+          });
+
+          updateCategoryFilters();
+          updateStatistics();
           renderProducts();
           showInfo(
             `Successfully loaded ${products.length} products from ${file.name}`
@@ -928,17 +1336,37 @@
     //   });
 
       searchBox.addEventListener("input", (e) => {
-        filterProducts(e.target.value);
+        filterProducts(e.target.value, categoryFilter.value, subCategoryFilter.value);
+      });
+
+      categoryFilter.addEventListener("change", (e) => {
+        filterProducts(searchBox.value, e.target.value, subCategoryFilter.value);
+      });
+
+      subCategoryFilter.addEventListener("change", (e) => {
+        filterProducts(searchBox.value, categoryFilter.value, e.target.value);
+      });
+
+      clearFilters.addEventListener("click", () => {
+        categoryFilter.value = "";
+        subCategoryFilter.value = "";
+        searchBox.value = "";
+        filterProducts("", "", "");
       });
 
       clearBtn.addEventListener("click", () => {
         products = [];
         filteredProducts = [];
         fileImageMap = {};
+        allCategories.clear();
+        allSubCategories.clear();
         window.carouselData = {};
         jsonInput.value = "";
         // imagesFolder.value = "";
         searchBox.value = "";
+        categoryFilter.value = "";
+        subCategoryFilter.value = "";
+        updateStatistics();
         renderProducts();
         hideInfo();
       });

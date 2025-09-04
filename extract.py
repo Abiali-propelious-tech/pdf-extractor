@@ -14,6 +14,8 @@ from datetime import datetime
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 import glob
+import re
+from requester import graphql_requester
 
 load_dotenv()
 # Optional OCR imports
@@ -27,7 +29,7 @@ except Exception:
 # AI/LangChain imports
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
-    from langchain_core.messages import HumanMessage
+    from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_core.output_parsers import JsonOutputParser
 
@@ -52,6 +54,8 @@ class PDFStructureExtractor:
         self.ocr_available = OCR_AVAILABLE
         self.main_output_dir = None
         self.image_dir = None
+        # Cache for sub-categories to avoid repeated API calls
+        self.sub_categories_cache = {}
         # Initialize AI model if available and API key provided
         self.ai_model = None
         if AI_AVAILABLE and gemini_api_key:
@@ -176,92 +180,104 @@ class PDFStructureExtractor:
         except Exception as e:
             print(f"⚠️ Failed to extract text blocks on page {page_num+1}: {e}")
 
-        # Image extraction
+        # Image extraction - FIXED VERSION
         try:
             debug_images_env = os.getenv("PDF_EXTRACTOR_DEBUG_IMAGES", "")
             debug_images = debug_images_env in ("1", "true", "yes", "y")
 
+            # Get page boundaries for validation
+            page_rect = page.rect
+            
+            # Get images that are actually ON this page
             image_list = page.get_images(full=True)
+            
         except Exception:
             image_list = []
 
+        # Track processed xrefs to avoid duplicates
+        processed_xrefs = set()
+
         for img_index, img in enumerate(image_list):
             try:
-                img_rects = page.get_image_rects(img[0])
+                xref = img[0]
+                
+                # Skip if we've already processed this xref on this page
+                if xref in processed_xrefs:
+                    continue
+                    
+                # Get all rectangles where this image appears
+                img_rects = page.get_image_rects(xref)
                 if not img_rects:
                     continue
-                rect = img_rects[0]
-
-                img_elem = ET.Element("image_block")
-                img_elem.set("id", f"img_{page_num}_{img_index}")
-                img_elem.set(
-                    "bbox", f"{rect.x0:.1f},{rect.y0:.1f},{rect.x1:.1f},{rect.y1:.1f}"
-                )
-                img_elem.set("width", f"{rect.width:.1f}")
-                img_elem.set("height", f"{rect.height:.1f}")
-
-                # Save image to disk
-                # image_filename = os.path.join(
-                #     image_folder, f"page_{page_num+1}_image_{img_index}.png"
-                # )
-                # try:
-                #     xref = img[0]
-                #     pix = fitz.Pixmap(page.parent, xref)
-                #     saved_ok = False
-                #     if pix.n < 5:
-                #         pix.save(image_filename)
-                #         saved_ok = True
-                #     else:
-                #         try:
-                #             conv = fitz.Pixmap(fitz.csRGB, pix)
-                #             conv.save(image_filename)
-                #             conv = None
-                #             saved_ok = True
-                #         except Exception:
-                #             try:
-                #                 img_bytes = pix.tobytes(output="png")
-                #                 from PIL import Image as PILImage
-                #                 import io
-
-                #                 pil_img = PILImage.open(io.BytesIO(img_bytes)).convert(
-                #                     "RGB"
-                #                 )
-                #                 pil_img.save(image_filename)
-                #                 saved_ok = True
-                #             except Exception:
-                #                 saved_ok = False
-
-                #     if saved_ok:
-                #         img_elem.set("file", image_filename)
-                #     else:
-                #         img_elem.set("file", "extraction_failed")
-                # except Exception:
-                #     img_elem.set("file", "extraction_failed")
-
-                xref = img[0]
-                saved_any = False
-                # iterate all rect occurrences for this xref (there may be multiple placements)
-                for r_idx, rect in enumerate(img_rects):
+                    
+                # Filter rectangles to only include those that are actually within the page bounds
+                valid_rects = []
+                for rect in img_rects:
+                    # Check if rectangle is within page boundaries with some tolerance
+                    tolerance = 1.0  # PDF points
+                    if (rect.x0 >= page_rect.x0 - tolerance and 
+                        rect.y0 >= page_rect.y0 - tolerance and 
+                        rect.x1 <= page_rect.x1 + tolerance and 
+                        rect.y1 <= page_rect.y1 + tolerance):
+                        # Also check if rectangle has reasonable dimensions
+                        if rect.width > 1 and rect.height > 1:
+                            valid_rects.append(rect)
+                
+                # Skip if no valid rectangles found on this page
+                if not valid_rects:
+                    continue
+                    
+                # Mark this xref as processed
+                processed_xrefs.add(xref)
+                
+                # Process each valid rectangle occurrence
+                for r_idx, rect in enumerate(valid_rects):
                     try:
-                        # small padding (in PDF points) to catch antialias/overlap
-                        pad = 0.5
-                        clip_rect = fitz.Rect(
-                            rect.x0 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad
-                        )
-
-                        # Prefer rendering a clipped region of the page at higher DPI
-                        zoom = 2  # 2x resolution (adjust if you need higher)
-                        mat = fitz.Matrix(zoom, zoom)
-                        clipped_pix = page.get_pixmap(
-                            matrix=mat, clip=clip_rect, alpha=False
-                        )
-
+                        # Create unique image filename for this occurrence
                         image_filename = os.path.join(
                             image_folder,
                             f"page_{page_num+1}_image_{img_index}_{r_idx}.png",
                         )
+                        
+                        # Extract image using page clipping (more accurate)
+                        pad = 0.5  # Small padding for anti-aliasing
+                        clip_rect = fitz.Rect(
+                            max(rect.x0 - pad, page_rect.x0),
+                            max(rect.y0 - pad, page_rect.y0), 
+                            min(rect.x1 + pad, page_rect.x1),
+                            min(rect.y1 + pad, page_rect.y1)
+                        )
+
+                        # Render at higher resolution for better quality
+                        zoom = 2  # 2x resolution
+                        mat = fitz.Matrix(zoom, zoom)
+                        
                         try:
+                            # Extract by clipping the page (most accurate method)
+                            clipped_pix = page.get_pixmap(
+                                matrix=mat, clip=clip_rect, alpha=False
+                            )
                             clipped_pix.save(image_filename)
+                            extraction_success = True
+                            clipped_pix = None  # Free memory
+                            
+                        except Exception:
+                            # Fallback: try to extract the raw image object
+                            try:
+                                pix = fitz.Pixmap(page.parent, xref)
+                                if pix.n < 5:
+                                    pix.save(image_filename)
+                                else:
+                                    conv = fitz.Pixmap(fitz.csRGB, pix)
+                                    conv.save(image_filename)
+                                    conv = None
+                                extraction_success = True
+                                pix = None  # Free memory
+                            except Exception:
+                                extraction_success = False
+
+                        # Create XML element only if extraction was successful
+                        if extraction_success:
                             img_block = ET.Element("image_block")
                             img_block.set("id", f"img_{page_num}_{img_index}_{r_idx}")
                             img_block.set(
@@ -271,72 +287,28 @@ class PDFStructureExtractor:
                             img_block.set("width", f"{rect.width:.1f}")
                             img_block.set("height", f"{rect.height:.1f}")
                             img_block.set("file", image_filename)
+                            img_block.set("xref", str(xref))  # Add xref for debugging
                             page_elem.append(img_block)
-                            saved_any = True
-                        except Exception:
-                            # fallback to embedded XObject pixmap if clipping fails
-                            try:
-                                pix = fitz.Pixmap(page.parent, xref)
-                                if pix.n < 5:
-                                    pix.save(image_filename)
-                                else:
-                                    conv = fitz.Pixmap(fitz.csRGB, pix)
-                                    conv.save(image_filename)
-                                    conv = None
-                                img_block = ET.Element("image_block")
-                                img_block.set(
-                                    "id", f"img_{page_num}_{img_index}_{r_idx}"
-                                )
-                                img_block.set(
-                                    "bbox",
-                                    f"{rect.x0:.1f},{rect.y0:.1f},{rect.x1:.1f},{rect.y1:.1f}",
-                                )
-                                img_block.set("width", f"{rect.width:.1f}")
-                                img_block.set("height", f"{rect.height:.1f}")
-                                img_block.set("file", image_filename)
-                                page_elem.append(img_block)
-                                saved_any = True
-                            except Exception:
-                                # last resort: mark as failed for this rect
-                                img_block = ET.Element("image_block")
-                                img_block.set(
-                                    "id", f"img_{page_num}_{img_index}_{r_idx}"
-                                )
-                                img_block.set(
-                                    "bbox",
-                                    f"{rect.x0:.1f},{rect.y0:.1f},{rect.x1:.1f},{rect.y1:.1f}",
-                                )
-                                img_block.set("width", f"{rect.width:.1f}")
-                                img_block.set("height", f"{rect.height:.1f}")
-                                img_block.set("file", "extraction_failed")
-                                page_elem.append(img_block)
-                    except Exception:
-                        # skip problematic rects but continue with others
+                        else:
+                            # Create element marking extraction failure
+                            img_block = ET.Element("image_block")
+                            img_block.set("id", f"img_{page_num}_{img_index}_{r_idx}")
+                            img_block.set(
+                                "bbox",
+                                f"{rect.x0:.1f},{rect.y0:.1f},{rect.x1:.1f},{rect.y1:.1f}",
+                            )
+                            img_block.set("width", f"{rect.width:.1f}")
+                            img_block.set("height", f"{rect.height:.1f}")
+                            img_block.set("file", "extraction_failed")
+                            img_block.set("xref", str(xref))
+                            page_elem.append(img_block)
+
+                    except Exception as e:
+                        print(f"⚠️ Failed to process image {img_index}_{r_idx} on page {page_num+1}: {e}")
                         continue
 
-                # if there were no rects or nothing saved, attempt a raw xref extraction once
-                if not saved_any:
-                    try:
-                        pix = fitz.Pixmap(page.parent, xref)
-                        image_filename = os.path.join(
-                            image_folder, f"page_{page_num+1}_image_{img_index}.png"
-                        )
-                        if pix.n < 5:
-                            pix.save(image_filename)
-                        else:
-                            conv = fitz.Pixmap(fitz.csRGB, pix)
-                            conv.save(image_filename)
-                            conv = None
-                        img_elem.set("file", image_filename)
-                    except Exception:
-                        img_elem.set("file", "extraction_failed")
-                # -                page_elem.append(img_elem)
-                # if we appended per-rect blocks above, do not append the original img_elem again
-                if not saved_any:
-                    page_elem.append(img_elem)
-
-                # page_elem.append(img_elem)
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ Failed to process image {img_index} on page {page_num+1}: {e}")
                 continue
 
         return page_elem
@@ -442,7 +414,7 @@ class PDFStructureExtractor:
             print(f"Error encoding image {image_path}: {e}")
             return None
 
-    def analyze_page_with_ai(self, page_data):
+    def analyze_page_with_ai(self, page_data, colors):
         """Use AI to intelligently match images with related text"""
         if not self.ai_model:
             print("⚠️  AI model not available for analysis")
@@ -506,43 +478,107 @@ class PDFStructureExtractor:
             content_parts = [
                 {
                     "type": "text",
-                    "text": f"""You are an expert in analyzing PDF catalogue pages. You will receive:
-1. A full page image showing the complete layout
-2. XML data with all text blocks and their coordinates, plus extracted image information
+                        "text": f"""You are an expert in analyzing PDF catalogue pages with advanced product identification and consolidation capabilities. You will receive:
+                        1. A full page image showing the complete layout
+                        2. XML data with all text blocks and their coordinates, plus extracted image information
 
-Your task is to:
-1. Analyze the full page image visually
-2. Identify products/items on this page
-3. For each product, determine which text blocks and images belong to it
-4. Create an enhanced, human-friendly description of the product (summarize features, style, or usage) as "ai_description"
-5. Return a simple array of products
+                        Your task is to:
+                        1. Analyze the full page image visually to understand the overall layout and product presentation
+                        2. Identify distinct products/items on this page using intelligent consolidation logic
+                        3. Group related images, text blocks, and variants that belong to the same product (different colors, sizes, angles, or detail shots should be considered as ONE product)
+                        4. For each consolidated product, determine which text blocks and images belong to it
+                        5. Extract comprehensive product information including specifications, features, materials, and dimensions
+                        6. Create enhanced descriptions and organize data according to the specified schema
+                        7. Return a structured array of products
 
-IMPORTANT: 
-- If you see no clear products on this page, return an empty array []
-- Respond with ONLY raw JSON, not wrapped in ```json``` code blocks
-- Don't include any unmatched items, just the products you can clearly identify
+                        INTELLIGENT PRODUCT CONSOLIDATION RULES:
+                        - If multiple images show the same item in different colors, angles, or detail shots, treat as ONE product with multiple images
+                        - If text mentions "available in colors" or shows color variants, consolidate into a single product entry
+                        - If similar items have only minor variations (size, color, finish), group them as one product with variants
+                        - Only create separate products if they are fundamentally different items (different models, completely different purposes)
+                        - Look for product codes/SKUs - similar codes often indicate variants of the same product
+                        - Consider spatial proximity and visual grouping in the layout
 
-Return JSON in this exact format:
-[
-  {{
-    "product_id": "unique_id_for_this_product",
-    "title": "product_name_or_title",
-    "product_code": "product_code_if_any",
-    "description": "product_description_if_any",
-    "ai_description": "AI-generated enhanced description",
-    "price": "price_if_any",
-    "style_tags": ["tag1", "tag2"],
-    "images": ["image_file_path1", "image_file_path2"],
-    "text_content": ["all_related_text_blocks"],
-    "coordinates": {{
-      "image_areas": ["x1,y1,x2,y2"],
-      "text_areas": ["x1,y1,x2,y2"]
-    }}
-  }}
-]
+                        COLOR IDENTIFICATION RULES:
+                        - Analyze product images visually to determine actual colors, NOT text content
+                        - Use the predefined colors array below to find the MOST SIMILAR color match for each product
+                        - Do NOT generate new hex color codes - only use colors from the provided array
+                        - Do NOT extract color information from text that might be product codes, SKUs, or other identifiers
+                        - Use AI vision to identify the dominant colors visible in the product images, then match to the closest color from the predefined list
+                        - If no close match is found in the predefined colors, use the closest available option
 
-XML DATA FOR THIS PAGE:
-{self.format_page_xml_for_ai(page_data)}""",
+                        PREDEFINED COLORS ARRAY (use these colors only):
+                        {json.dumps(colors) if colors else "[]"}
+
+                        IMPORTANT: 
+                        - If you see no clear products on this page, return an empty array []
+                        - Respond with ONLY raw JSON, not wrapped in ```json``` code blocks
+                        - Don't include any unmatched items, just the products you can clearly identify
+                        - Ensure price is always a decimal number, use 0.00 if no price found
+                        - Generate meaningful slugs based on product names
+                        - Extract rich content for features, dimensions, and specifications when available
+                        - Populate color information comprehensively when color variants are shown, using visual analysis to match colors from the predefined array
+
+                        Return JSON in this exact format matching the schema:
+                        [
+                        {{
+                            "price": 0.00,
+                            "name": "product_name_or_title",
+                            "image1": "image_file_path_1",
+                            "image2": "image_file_path_2", 
+                            "image3": "image_file_path_3",
+                            "image4": "image_file_path_4",
+                            "image5": "image_file_path_5",
+                            "product_colors": [
+                            {{
+                                "name": "color_name",
+                                "code": "#hex_color_code"
+                            }}
+                            ],
+                            "slug": "product-name-slug",
+                            "short_description": "Brief product description or key selling points",
+                            "product_materials": "Materials used in construction/manufacturing",
+                            "product_color_image": [
+                            {{
+                                "product_color": "color_name",
+                                "product_color_image": "image_path_for_this_color",
+                                "product_color_price": "price_for_this_color_variant",
+                                "product_color_size": "size_if_applicable"
+                            }}
+                            ],
+                            "product_features": "- [Extract actual features from product information]\n- [Use bullet points for each feature]\n- [Include benefits and unique selling points]",
+                            "product_dimensions": "- [Extract actual measurements from product data]\n- [Include length, width, height as available]\n- [Add weight if mentioned]",
+                            "product_specifications": "- [Extract actual materials and finishes]\n- [Include installation requirements if mentioned]\n- [Add warranty information if available]"
+                        }}
+                        ]
+
+                        COLOR VARIANT UNIQUENESS:
+                        - Each product must have UNIQUE color variants - never duplicate the same color name/code
+                        - If you see multiple images of the same color, only include that color ONCE in product_colors
+                        - Each color in product_colors must represent a visually distinct variant
+
+                        RICH TEXT FORMAT REQUIREMENTS:
+                        - Use proper Markdown formatting (NOT HTML) for product_features, product_dimensions, and product_specifications
+                        - Use headers (##), bullet points (-), and structured lists for better readability
+                        - Extract and include actual product information from the page content and images
+                        - Use clear, descriptive labels for measurements and specifications
+                        - Only include information that is actually available in the source material
+
+                        FIELD REQUIREMENTS:
+                        - price: Always include as decimal (0.00 if not found)
+                        - name: Clear, descriptive product name
+                        - image1-5: Include available image paths, leave null if fewer than 5 images
+                        - product_colors: Array of UNIQUE color options with names and hex color codes from the predefined colors array only (no duplicates)
+                        - slug: URL-friendly version of product name (lowercase, hyphens)
+                        - short_description: Concise summary of the product
+                        - product_materials: Materials information when available
+                        - product_color_image: Detailed color variant information
+                        - product_features: Markdown formatted list of key features and benefits
+                        - product_dimensions: Markdown formatted dimensions, measurements, and sizing information  
+                        - product_specifications: Markdown formatted technical specifications and detailed product information
+
+                        XML DATA FOR THIS PAGE:
+                        {self.format_page_xml_for_ai(page_data)}""",
                 }
             ]
 
@@ -615,8 +651,6 @@ XML DATA FOR THIS PAGE:
 
             # Parse JSON response - handle markdown code blocks and common formatting issues
             try:
-                import json
-                import re
 
                 # raw = (response.content or "").strip()
                 raw = (response.content or "").strip()
@@ -767,109 +801,7 @@ XML DATA FOR THIS PAGE:
 
         return formatted
 
-    def ai_enhanced_extraction(self, xml_path, output_paths=None):
-        """Extract products using AI-enhanced analysis with progressive saving"""
-        if not self.ai_model:
-            print("⚠️  AI model not available. Only XML is available.")
-            return None
 
-        print("🤖 Starting AI-enhanced extraction...")
-
-        tree = ET.parse(xml_path)
-        root = tree.getroot()
-
-        ai_results = []
-
-        # Initialize progress files if output paths provided
-        if output_paths:
-            ai_json_path = output_paths["xml_path"].replace(
-                "_structure.xml", "_ai_enhanced.json"
-            )
-            progress_file = output_paths["xml_path"].replace(
-                "_structure.xml", "_progress.json"
-            )
-
-            # Initialize progress tracking
-            progress_data = {
-                "total_pages": len(root.findall("page")),
-                "completed_pages": 0,
-                "last_updated": "",
-                "ai_results": [],
-            }
-
-        for page in root.findall("page"):
-            page_num = page.get("number")
-            print(f"   Analyzing page {page_num} with AI...")
-
-            # Prepare page data
-            page_data = {
-                "page_number": int(page_num),
-                "width": page.get("width"),
-                "height": page.get("height"),
-                "images": [],
-                "texts": [],
-            }
-
-            # Collect images
-            for img in page.findall("image_block"):
-                page_data["images"].append(
-                    {
-                        "id": img.get("id"),
-                        "file": img.get("file"),
-                        "bbox": img.get("bbox"),
-                        "width": img.get("width"),
-                        "height": img.get("height"),
-                    }
-                )
-
-            # Collect texts
-            for text in page.findall("text_block"):
-                page_data["texts"].append(
-                    {
-                        "id": text.get("id"),
-                        "content": text.text or "",
-                        "type": text.get("type"),
-                        "bbox": text.get("bbox"),
-                        "font": text.get("font"),
-                        "size": text.get("size"),
-                    }
-                )
-
-            # Analyze with AI
-            ai_result = self.analyze_page_with_ai(page_data)
-            if ai_result:
-                ai_results.append(ai_result)
-                print(f"   ✅ Page {page_num} analysis completed successfully")
-
-                # Save progress after each page if output paths provided
-                if output_paths:
-                    from datetime import datetime
-
-                    # Update progress data
-                    progress_data["ai_results"] = ai_results
-                    progress_data["completed_pages"] = len(ai_results)
-                    progress_data["last_updated"] = datetime.now().isoformat()
-
-                    # Save progress file
-                    with open(progress_file, "w", encoding="utf-8") as f:
-                        json.dump(progress_data, f, indent=2, ensure_ascii=False)
-
-                    # Save current AI results
-                    with open(ai_json_path, "w", encoding="utf-8") as f:
-                        json.dump(ai_results, f, indent=2, ensure_ascii=False)
-
-                    print(
-                        f"   ✅ Page {page_num} completed and saved ({len(ai_results)}/{progress_data['total_pages']})"
-                    )
-            else:
-                print(f"   ❌ Page {page_num} failed AI analysis")
-
-            # Add rate limiting between pages to avoid overwhelming the API
-            import time
-
-            time.sleep(2)  # Wait 2 seconds between pages
-
-        return ai_results
 
     def format_page_xml_for_ai(self, page_data):
         """Format page XML data for AI analysis"""
@@ -961,8 +893,30 @@ XML DATA FOR THIS PAGE:
                     }
                 )
 
+            # Define your query
+            query = """
+                query ProductColors($pagination: PaginationArg) {
+                    productColors(pagination: $pagination) {
+                        code
+                        name
+                    }
+                }"""
+
+            # Variables to send with the query
+            variables = {
+                "pagination": {
+                    "limit": -1  
+                }
+            }
+
+            try:
+                result = graphql_requester(query, variables)
+                colors = result.get("productColors")
+            except Exception as e:
+                print(str(e))
+
             # Analyze with AI
-            page_products = self.analyze_page_with_ai(page_data)
+            page_products = self.analyze_page_with_ai(page_data, colors)
             if page_products and isinstance(page_products, list):
                 # Add page number to each product for reference
                 for product in page_products:
@@ -1001,6 +955,11 @@ XML DATA FOR THIS PAGE:
             import time
 
             time.sleep(2)  # Wait 2 seconds between pages
+
+        try:
+            self.add_product_category(ai_json_path)
+        except Exception as e:
+            print(f"Error adding product category or sub category: {e}")
 
         print(f"\n🎉 AI extraction completed!")
         print(f"   📊 Total products found: {len(all_products)}")
@@ -1132,7 +1091,132 @@ XML DATA FOR THIS PAGE:
             remove_files=remove_files,
         )
 
-    # ...existing code...
+    def add_product_category(self, json_path: str):
+        """Add product category to the JSON file"""
+        categories = self.get_categories()
+
+        with open(json_path, "r") as f:
+            products = json.load(f)
+
+        system_message = SystemMessage(content=f"""You are a product categorization AI. You will receive a product JSON object containing name, description, materials, features, and other details, along with an array of category strings. Analyze the product's primary function, materials, and intended use to select the most appropriate category from the provided list. Prioritize the product's main purpose over secondary attributes. If multiple categories could apply, choose the most specific one. Return only the exact category string from the array, with no additional text or formatting. Available categories: {categories}""")
+
+        for product in products:
+            try:
+                human_message = HumanMessage(content=f"""Product: {product}""")
+                
+                # Get AI response with retry logic for category
+                import time
+                max_retries = 3
+                category_response = None
+                
+                for attempt in range(max_retries):
+                    try:
+                        category_response = self.ai_model.invoke([system_message, human_message])
+                        break
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            print(f"     ⚠️ Category API call failed (attempt {attempt + 1}), retrying in 5 seconds...")
+                            time.sleep(5)
+                            continue
+                        else:
+                            print(f"     ❌ Category API call failed after {max_retries} attempts: {e}")
+                            raise e
+                
+                if category_response:
+                    product["category"] = category_response.content
+
+                    sub_categories = self.get_sub_categories(product["category"])
+                    sub_category_system_message = SystemMessage(content=f"""You are a product sub categorization AI. You will receive a product JSON object containing name, description, materials, features, and other details, along with an array of sub category strings. Analyze the product's primary function, materials, and intended use to select the most appropriate sub category from the provided list. Prioritize the product's main purpose over secondary attributes. If multiple sub categories could apply, choose the most specific one. Return only the exact sub category string from the array, with no additional text or formatting. Available sub categories: {sub_categories}""")
+                    
+                    # Get AI response with retry logic for sub-category
+                    sub_category_response = None
+                    
+                    for attempt in range(max_retries):
+                        try:
+                            sub_category_response = self.ai_model.invoke([sub_category_system_message, human_message])
+                            break
+                        except Exception as e:
+                            if attempt < max_retries - 1:
+                                print(f"     ⚠️ Sub-category API call failed (attempt {attempt + 1}), retrying in 5 seconds...")
+                                time.sleep(5)
+                                continue
+                            else:
+                                print(f"     ❌ Sub-category API call failed after {max_retries} attempts: {e}")
+                                raise e
+                    
+                    if sub_category_response:
+                        product["sub_category"] = sub_category_response.content
+                        print(f"Added category to product: {product['name']} - {product['category']}")
+                        
+            except Exception as e:
+                print(f"Error adding category to product: {e}")
+
+        with open(json_path, "w") as f:
+            json.dump(products, f, indent=2, ensure_ascii=False)
+
+    def get_categories(self):
+        categories = []
+        try:
+            query = """
+                query ProductCategories($pagination: PaginationArg) {
+                    productCategories(pagination: $pagination) {
+                        name
+                    }
+                }
+            """
+
+            # Variables to send with the query
+            variables = {
+                "pagination": {
+                    "limit": -1  
+                }
+            }
+            result = graphql_requester(query, variables)
+            product_categories = result.get("productCategories")
+            categories = [category["name"] for category in product_categories]
+        except Exception as e:
+            print(str(e))
+        return categories
+    
+    def get_sub_categories(self, category: str):
+        # Check cache first
+        if category in self.sub_categories_cache:
+            print(f"Using cached sub-categories for: {category}")
+            return self.sub_categories_cache[category]
+        
+        sub_categories = []
+
+        try:
+            print(f"Fetching sub-categories from API for: {category}")
+            query = """
+                query ProductSubCategories($filters: ProductSubCategoryFiltersInput) {
+                    productSubCategories(filters: $filters) {
+                        name
+                    }
+                }
+            """
+
+            # Variables to send with the query
+            variables = {
+                "filters": {
+                    "product_category": {
+                        "name": {
+                            "eq": category
+                        }
+                    }
+                }
+            }
+            result = graphql_requester(query, variables)
+            product_sub_categories = result.get("productSubCategories")
+            sub_categories = [sub_category["name"] for sub_category in product_sub_categories]
+            
+            # Cache the result for future use
+            self.sub_categories_cache[category] = sub_categories
+            print(f"Cached sub-categories for: {category}")
+            
+        except Exception as e:
+            print(str(e))
+        return sub_categories
 
 
 # Usage Example
