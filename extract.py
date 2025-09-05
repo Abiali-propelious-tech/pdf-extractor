@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 import glob
 import re
 from requester import graphql_requester
+from json_parser import parse_ai_json_response
 
 load_dotenv()
 # Optional OCR imports
@@ -414,6 +415,7 @@ class PDFStructureExtractor:
             print(f"Error encoding image {image_path}: {e}")
             return None
 
+
     def analyze_page_with_ai(self, page_data, colors):
         """Use AI to intelligently match images with related text"""
         if not self.ai_model:
@@ -532,7 +534,8 @@ class PDFStructureExtractor:
                             "product_colors": [
                             {{
                                 "name": "color_name",
-                                "code": "#hex_color_code"
+                                "code": "#hex_color_code",
+                                "documentId": "color_document_id"
                             }}
                             ],
                             "slug": "product-name-slug",
@@ -553,7 +556,7 @@ class PDFStructureExtractor:
                         ]
 
                         COLOR VARIANT UNIQUENESS:
-                        - Each product must have UNIQUE color variants - never duplicate the same color name/code
+                        - Each product must have UNIQUE color variants - never duplicate the same color name/code/documentId
                         - If you see multiple images of the same color, only include that color ONCE in product_colors
                         - Each color in product_colors must represent a visually distinct variant
 
@@ -568,7 +571,7 @@ class PDFStructureExtractor:
                         - price: Always include as decimal (0.00 if not found)
                         - name: Clear, descriptive product name
                         - image1-5: Include available image paths, leave null if fewer than 5 images
-                        - product_colors: Array of UNIQUE color options with names and hex color codes from the predefined colors array only (no duplicates)
+                        - product_colors: Array of UNIQUE color options with names, hex color codes and documentId from the predefined colors array only (no duplicates) 
                         - slug: URL-friendly version of product name (lowercase, hyphens)
                         - short_description: Concise summary of the product
                         - product_materials: Materials information when available
@@ -649,130 +652,14 @@ class PDFStructureExtractor:
                         )
                         return None
 
-            # Parse JSON response - handle markdown code blocks and common formatting issues
-            try:
-
-                # raw = (response.content or "").strip()
-                raw = (response.content or "").strip()
-
-                # If wrapped in triple-backticks, extract inner content
-                if raw.startswith("```"):
-                    m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL)
-                    if m:
-                        raw = m.group(1).strip()
-                    else:
-                        raw = re.sub(
-                            r"^```(?:json)?\s*\n?|```\s*$", "", raw, flags=re.MULTILINE
-                        ).strip()
-
-                # If empty or only quotes, bail out gracefully
-                if not raw or raw.strip() in ('""', "''"):
-                    print("     ⚠️ AI returned empty response")
-                    return None
-
-                def _sanitize_json_text(s: str) -> str:
-                    # Remove any leading non-json characters before first { or [
-                    first = s.find("{")
-                    first_arr = s.find("[")
-                    if first == -1 or (first_arr != -1 and first_arr < first):
-                        first = first_arr
-                    if first > 0:
-                        s = s[first:]
-
-                    # Trim anything after the last closing brace/bracket
-                    last_obj = s.rfind("}")
-                    last_arr = s.rfind("]")
-                    last = max(last_obj, last_arr)
-                    if last != -1 and last < len(s) - 1:
-                        s = s[: last + 1]
-
-                    # Remove trailing commas before closing braces/brackets: {...,} or [...,]
-                    s = re.sub(r",\s*(?=[}\]])", "", s)
-
-                    # Remove accidental repeated commas
-                    s = re.sub(r",\s*,+", ",", s)
-
-                    return s.strip()
-
-                def _escape_control_chars_in_json_strings(s: str) -> str:
-                    r"""
-                    Replace raw control characters inside JSON string literals with \uXXXX escapes
-                    so json.loads won't fail on invalid control characters.
-                    """
-
-                    def _replace(match):
-                        txt = match.group(0)
-                        inner = txt[1:-1]
-                        new_inner = []
-                        i = 0
-                        while i < len(inner):
-                            ch = inner[i]
-                            # preserve existing escape sequences
-                            if ch == "\\" and i + 1 < len(inner):
-                                new_inner.append(ch)
-                                i += 1
-                                new_inner.append(inner[i])
-                            else:
-                                cp = ord(ch)
-                                if cp < 0x20:
-                                    new_inner.append("\\u%04x" % cp)
-                                else:
-                                    new_inner.append(ch)
-                            i += 1
-                        return '"' + "".join(new_inner) + '"'
-
-                    return re.sub(r'"(\\.|[^"\\])*"', _replace, s)
-
-                parsed = None
-
-                # Try direct JSON parse first (fast path)
-                try:
-                    parsed = json.loads(raw)
-                except Exception:
-                    # Try sanitized variants
-                    candidate = None
-
-                    # Try to extract an outermost JSON array or object
-                    arr_match = re.search(r"(\[\s*[\s\S]*\])", raw)
-                    obj_match = re.search(r"(\{[\s\S]*\})", raw)
-                    if arr_match:
-                        candidate = arr_match.group(1)
-                    elif obj_match:
-                        candidate = obj_match.group(1)
-                    else:
-                        candidate = raw
-
-                    # sanitize candidate to fix trailing commas and stray text
-                    candidate = _sanitize_json_text(candidate)
-
-                    # escape control characters inside JSON strings
-                    candidate = _escape_control_chars_in_json_strings(candidate)
-
-                    # try parsing sanitized candidate
-                    try:
-                        parsed = json.loads(candidate)
-                    except Exception:
-                        # last resort: try replacing single quotes with double then sanitize/escape again
-                        try:
-                            cand2 = candidate.replace("'", '"')
-                            cand2 = _sanitize_json_text(cand2)
-                            cand2 = _escape_control_chars_in_json_strings(cand2)
-                            parsed = json.loads(cand2)
-                        except Exception:
-                            parsed = None
-
-                if parsed is None:
-                    print("     ⚠️ Failed to parse AI response as JSON after fallbacks")
-                    print(f"     Raw response (truncated): {response.content[:500]}...")
-                    return None
-
-                # Validate image paths inside the parsed result to avoid hallucinated image references
-                parsed = _validate_ai_images(page_data, parsed)
-                return parsed
-
-            except Exception as e:
-                print(f"     ⚠️ Error parsing AI response: {e}")
+            # Parse JSON response using the reusable function
+            parsed = parse_ai_json_response(response.content, "product analysis")
+            if parsed is None:
                 return None
+
+            # Validate image paths inside the parsed result to avoid hallucinated image references
+            parsed = _validate_ai_images(page_data, parsed)
+            return parsed
 
         except Exception as e:
             print(f"Error in AI analysis: {e}")
@@ -899,6 +786,7 @@ class PDFStructureExtractor:
                     productColors(pagination: $pagination) {
                         code
                         name
+                        documentId
                     }
                 }"""
 
@@ -1091,17 +979,38 @@ class PDFStructureExtractor:
             remove_files=remove_files,
         )
 
-    def add_product_category(self, json_path: str):
+    def add_product_category(self, json_path: str, start_from = 0):
         """Add product category to the JSON file"""
         categories = self.get_categories()
 
-        with open(json_path, "r") as f:
+        with open(json_path, "r", encoding="utf-8") as f:
             products = json.load(f)
 
-        system_message = SystemMessage(content=f"""You are a product categorization AI. You will receive a product JSON object containing name, description, materials, features, and other details, along with an array of category strings. Analyze the product's primary function, materials, and intended use to select the most appropriate category from the provided list. Prioritize the product's main purpose over secondary attributes. If multiple categories could apply, choose the most specific one. Return only the exact category string from the array, with no additional text or formatting. Available categories: {categories}""")
+        total_products = len(products)
+        print(f"Debug: start_from parameter = {start_from}")
+        print(f"🏷️  Starting categorization for {total_products} products...")
 
-        for product in products:
+        system_message = SystemMessage(content=f"""You are a product categorization AI. You will receive a product JSON object containing name, description, materials, features, and other details, along with an array of objects with name and documentId of categories. 
+
+CRITICAL REQUIREMENTS:
+- You MUST respond with ONLY valid JSON format
+- Do NOT include any explanatory text, reasoning, or additional content
+- Do NOT wrap your response in markdown code blocks
+- Your response must be a single JSON object with "name" and "documentId" fields
+
+TASK: Analyze the product's primary function, materials, and intended use to select the most appropriate category from the provided list. Prioritize the product's main purpose over secondary attributes. If multiple categories could apply, choose the most specific one.
+
+RESPONSE FORMAT (return exactly this structure):
+{{"name": "Selected Category Name", "documentId": "selected_category_document_id"}}
+
+Available categories: {categories}
+
+Remember: Respond with ONLY the JSON object, nothing else.""")
+
+        for index, product in enumerate(products[start_from:], start_from + 1):
             try:
+                print(f"   📝 Processing product {index}/{total_products}: {product.get('name', 'Unknown')}")
+                
                 human_message = HumanMessage(content=f"""Product: {product}""")
                 
                 # Get AI response with retry logic for category
@@ -1123,10 +1032,37 @@ class PDFStructureExtractor:
                             raise e
                 
                 if category_response:
-                    product["category"] = category_response.content
+                    parsed_category = parse_ai_json_response(category_response.content, "category", expected_keys=["name", "documentId"])
+                    if parsed_category:
+                        product["category"] = parsed_category
+                    else:
+                        print(f"     ⚠️ Failed to parse category for product {index}/{total_products}")
+                        # Try fallback: ask AI to choose from a simplified list
+                        fallback_category = self._fallback_category_selection(product, categories)
+                        if fallback_category:
+                            product["category"] = fallback_category
+                            print(f"     ✅ Fallback category selected: {fallback_category}")
+                        else:
+                            print(f"     ❌ No category could be determined for product {index}/{total_products}")
+                            continue
 
                     sub_categories = self.get_sub_categories(product["category"])
-                    sub_category_system_message = SystemMessage(content=f"""You are a product sub categorization AI. You will receive a product JSON object containing name, description, materials, features, and other details, along with an array of sub category strings. Analyze the product's primary function, materials, and intended use to select the most appropriate sub category from the provided list. Prioritize the product's main purpose over secondary attributes. If multiple sub categories could apply, choose the most specific one. Return only the exact sub category string from the array, with no additional text or formatting. Available sub categories: {sub_categories}""")
+                    sub_category_system_message = SystemMessage(content=f"""You are a product sub categorization AI. You will receive a product JSON object containing name, description, materials, features, and other details, along with an array of objects with name and documentId of sub categories.
+
+CRITICAL REQUIREMENTS:
+- You MUST respond with ONLY valid JSON format
+- Do NOT include any explanatory text, reasoning, or additional content
+- Do NOT wrap your response in markdown code blocks
+- Your response must be a single JSON object with "name" and "documentId" fields
+
+TASK: Analyze the product's primary function, materials, and intended use to select the most appropriate sub category from the provided list. Prioritize the product's main purpose over secondary attributes. If multiple sub categories could apply, choose the most specific one.
+
+RESPONSE FORMAT (return exactly this structure):
+{{"name": "Selected Sub Category Name", "documentId": "selected_sub_category_document_id"}}
+
+Available sub categories: {sub_categories}
+
+Remember: Respond with ONLY the JSON object, nothing else.""")
                     
                     # Get AI response with retry logic for sub-category
                     sub_category_response = None
@@ -1145,14 +1081,116 @@ class PDFStructureExtractor:
                                 raise e
                     
                     if sub_category_response:
-                        product["sub_category"] = sub_category_response.content
-                        print(f"Added category to product: {product['name']} - {product['category']}")
+                        parsed_sub_category = parse_ai_json_response(sub_category_response.content, "sub-category", expected_keys=["name", "documentId"])
+                        if parsed_sub_category:
+                            product["sub_category"] = parsed_sub_category
+                            print(f"     ✅ Added category: {product['category'].get('name')} | sub-category: {product['sub_category'].get('name')}")
+                            
+                            # Update only this specific product in the JSON file
+                            self._update_single_product_in_json(json_path, index - 1, product)
+                        else:
+                            print(f"     ⚠️ Failed to parse sub-category for product {index}/{total_products}")
+                            # Try fallback: ask AI to choose from a simplified list
+                            fallback_sub_category = self._fallback_sub_category_selection(product, sub_categories)
+                            if fallback_sub_category:
+                                product["sub_category"] = fallback_sub_category
+                                print(f"     ✅ Fallback sub-category selected: {fallback_sub_category}")
+                            else:
+                                print(f"     ⚠️ No sub-category could be determined for product {index}/{total_products}")
+                            # Still update with just the category
+                            self._update_single_product_in_json(json_path, index - 1, product)
                         
             except Exception as e:
-                print(f"Error adding category to product: {e}")
+                print(f"     ❌ Error adding category to product {index}/{total_products}: {e}")
 
-        with open(json_path, "w") as f:
-            json.dump(products, f, indent=2, ensure_ascii=False)
+    def _fallback_category_selection(self, product: dict, categories: list) -> dict:
+        """Fallback method to select category when AI response parsing fails"""
+        try:
+            if not categories:
+                return None
+                
+            # Create a simplified prompt with just the product name and a numbered list
+            product_name = product.get('name', 'Unknown Product')
+            category_list = "\n".join([f"{i+1}. {cat.get('name', 'Unknown')}" for i, cat in enumerate(categories)])
+            
+            fallback_message = SystemMessage(content=f"""You are a product categorization AI. The previous response failed to parse, so I need you to respond with ONLY a number.
+
+Product: {product_name}
+
+Available categories (choose by number):
+{category_list}
+
+Respond with ONLY the number (1, 2, 3, etc.) corresponding to the most appropriate category. Do not include any other text.""")
+            
+            human_message = HumanMessage(content="Please select the most appropriate category number.")
+            
+            response = self.ai_model.invoke([fallback_message, human_message])
+            response_text = response.content.strip()
+            
+            # Extract number from response
+            number_match = re.search(r'\b(\d+)\b', response_text)
+            if number_match:
+                selected_index = int(number_match.group(1)) - 1
+                if 0 <= selected_index < len(categories):
+                    return categories[selected_index]
+                    
+        except Exception as e:
+            print(f"     ⚠️ Fallback category selection failed: {e}")
+        
+        return None
+
+    def _fallback_sub_category_selection(self, product: dict, sub_categories: list) -> dict:
+        """Fallback method to select sub-category when AI response parsing fails"""
+        try:
+            if not sub_categories:
+                return None
+                
+            # Create a simplified prompt with just the product name and a numbered list
+            product_name = product.get('name', 'Unknown Product')
+            sub_category_list = "\n".join([f"{i+1}. {cat.get('name', 'Unknown')}" for i, cat in enumerate(sub_categories)])
+            
+            fallback_message = SystemMessage(content=f"""You are a product sub-categorization AI. The previous response failed to parse, so I need you to respond with ONLY a number.
+
+Product: {product_name}
+
+Available sub-categories (choose by number):
+{sub_category_list}
+
+Respond with ONLY the number (1, 2, 3, etc.) corresponding to the most appropriate sub-category. Do not include any other text.""")
+            
+            human_message = HumanMessage(content="Please select the most appropriate sub-category number.")
+            
+            response = self.ai_model.invoke([fallback_message, human_message])
+            response_text = response.content.strip()
+            
+            # Extract number from response
+            number_match = re.search(r'\b(\d+)\b', response_text)
+            if number_match:
+                selected_index = int(number_match.group(1)) - 1
+                if 0 <= selected_index < len(sub_categories):
+                    return sub_categories[selected_index]
+                    
+        except Exception as e:
+            print(f"     ⚠️ Fallback sub-category selection failed: {e}")
+        
+        return None
+
+    def _update_single_product_in_json(self, json_path: str, product_index: int, updated_product: dict):
+        """Update a single product in the JSON file without rewriting the entire file"""
+        try:
+            # Read the current JSON file
+            with open(json_path, "r", encoding="utf-8") as f:
+                products = json.load(f)
+            
+            # Update only the specific product
+            products[product_index] = updated_product
+            
+            # Write back the updated products array
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(products, f, indent=2, ensure_ascii=False)
+                
+        except Exception as e:
+            print(f"     ⚠️ Failed to update product {product_index + 1} in JSON: {e}")
 
     def get_categories(self):
         categories = []
@@ -1161,6 +1199,7 @@ class PDFStructureExtractor:
                 query ProductCategories($pagination: PaginationArg) {
                     productCategories(pagination: $pagination) {
                         name
+                        documentId
                     }
                 }
             """
@@ -1172,26 +1211,27 @@ class PDFStructureExtractor:
                 }
             }
             result = graphql_requester(query, variables)
-            product_categories = result.get("productCategories")
-            categories = [category["name"] for category in product_categories]
+            categories = result.get("productCategories")
         except Exception as e:
             print(str(e))
         return categories
     
-    def get_sub_categories(self, category: str):
+    def get_sub_categories(self, category: dict):
         # Check cache first
-        if category in self.sub_categories_cache:
-            print(f"Using cached sub-categories for: {category}")
-            return self.sub_categories_cache[category]
+        category_id = category.get('documentId')
+        if category_id in self.sub_categories_cache:
+            print(f"Using cached sub-categories for: {category.get('name')}")
+            return self.sub_categories_cache[category_id]
         
         sub_categories = []
 
         try:
-            print(f"Fetching sub-categories from API for: {category}")
+            print(f"Fetching sub-categories from API for: {category.get('name')}")
             query = """
                 query ProductSubCategories($filters: ProductSubCategoryFiltersInput) {
                     productSubCategories(filters: $filters) {
                         name
+                        documentId
                     }
                 }
             """
@@ -1200,19 +1240,18 @@ class PDFStructureExtractor:
             variables = {
                 "filters": {
                     "product_category": {
-                        "name": {
-                            "eq": category
+                        "documentId": {
+                            "eq": category.get('documentId')
                         }
                     }
                 }
             }
             result = graphql_requester(query, variables)
-            product_sub_categories = result.get("productSubCategories")
-            sub_categories = [sub_category["name"] for sub_category in product_sub_categories]
+            sub_categories = result.get("productSubCategories")
             
             # Cache the result for future use
-            self.sub_categories_cache[category] = sub_categories
-            print(f"Cached sub-categories for: {category}")
+            self.sub_categories_cache[category_id] = sub_categories
+            print(f"Cached sub-categories for: {category.get('name')}")
             
         except Exception as e:
             print(str(e))
@@ -1220,7 +1259,7 @@ class PDFStructureExtractor:
 
 
 # Usage Example
-def main(pdf_file, use_ai: bool = True):
+def main(pdf_file, use_ai: bool = True, add_category: bool = False, start_from: int = 0):
     # Timing: record start time
     start_ts = time.time()
     start_dt = datetime.now()
@@ -1244,73 +1283,79 @@ def main(pdf_file, use_ai: bool = True):
 
     extractor = PDFStructureExtractor(gemini_api_key=gemini_api_key)
 
-    # Step 1: Create organized output folder structure
-    print("Creating output folder structure...")
-    paths = extractor.create_output_structure(pdf_file)
-
-    print(f"Output directory created: {paths['main_dir']}")
-
-    # Step 2: Convert PDF to structured XML
-    print("Converting PDF to XML...")
-    xml_file = extractor.pdf_to_xml(pdf_file, paths["xml_path"], paths["images_dir"])
-    print(f"XML saved to: {xml_file}")
-
-    # Filter out small images before AI processing
-    print("Filtering small images (<30px) from images folder and XML...")
-    try:
-        removed = extractor.prepare_for_ai(
-            xml_path=xml_file,
-            image_folder=paths["images_dir"],
-            min_dim=30,
-            remove_files=True,
-        )
-        print(f"Filtered {len(removed)} small images.")
-        if removed:
-            sample = ", ".join(sorted(list(removed))[:20])
-            more = "..." if len(removed) > 20 else ""
-            print(f"Removed images (sample): {sample}{more}")
-    except Exception as e:
-        print(f"⚠️ Failed to filter small images: {e}")
-
-    # Step 3: Extract products with AI enhancement (optional)
-    if use_ai and extractor.ai_model:
-        print("🤖 Starting AI-enhanced extraction...")
-        ai_results = extractor.ai_enhanced_extraction(xml_file, paths)
-
-        print(f"🤖 AI analysis complete!")
-        print(
-            f"   📊 AI Enhanced data: {paths['xml_path'].replace('_structure.xml', '_ai_enhanced.json')}"
-        )
-        print(
-            f"   📈 Progress tracking: {paths['xml_path'].replace('_structure.xml', '_progress.json')}"
-        )
+    if add_category:
+        print(f"Adding category to {pdf_file}")
+        extractor.add_product_category(pdf_file, start_from)
     else:
-        print("⚠️  AI not available, only XML structure created.")
+        print(pdf_file)
 
-    print(f"\n✅ Processing complete!")
-    print(f"📁 All files organized in: {paths['main_dir']}")
-    print(f"   📄 XML: {os.path.basename(paths['xml_path'])}")
+        # Step 1: Create organized output folder structure
+        print("Creating output folder structure...")
+        paths = extractor.create_output_structure(pdf_file)
 
-    if use_ai and extractor.ai_model:
-        print(
-            f"   🤖 AI Enhanced JSON: {os.path.basename(paths['xml_path'].replace('_structure.xml', '_ai_enhanced.json'))}"
-        )
-        print(
-            f"   📈 Progress JSON: {os.path.basename(paths['xml_path'].replace('_structure.xml', '_progress.json'))}"
-        )
+        print(f"Output directory created: {paths['main_dir']}")
 
-    # Count images
-    if os.path.exists(paths["images_dir"]):
-        image_count = len(
-            [f for f in os.listdir(paths["images_dir"]) if f.endswith(".png")]
-        )
-        print(f"   🖼️  Images folder: {image_count} images")
+        # Step 2: Convert PDF to structured XML
+        print("Converting PDF to XML...")
+        xml_file = extractor.pdf_to_xml(pdf_file, paths["xml_path"], paths["images_dir"])
+        print(f"XML saved to: {xml_file}")
 
-    print(f"\n🎉 Ready to explore your data!")
-    if extractor.ai_model:
-        print("   🤖 AI has intelligently matched images with related text")
-        print("   📊 The XML contains all structural data with coordinates")
-        print("   📈 Progress is saved after each page completion")
+        # Filter out small images before AI processing
+        print("Filtering small images (<30px) from images folder and XML...")
+        try:
+            removed = extractor.prepare_for_ai(
+                xml_path=xml_file,
+                image_folder=paths["images_dir"],
+                min_dim=30,
+                remove_files=True,
+            )
+            print(f"Filtered {len(removed)} small images.")
+            if removed:
+                sample = ", ".join(sorted(list(removed))[:20])
+                more = "..." if len(removed) > 20 else ""
+                print(f"Removed images (sample): {sample}{more}")
+        except Exception as e:
+            print(f"⚠️ Failed to filter small images: {e}")
+
+        # Step 3: Extract products with AI enhancement (optional)
+        if use_ai and extractor.ai_model:
+            print("🤖 Starting AI-enhanced extraction...")
+            ai_results = extractor.ai_enhanced_extraction(xml_file, paths)
+
+            print(f"🤖 AI analysis complete!")
+            print(
+                f"   📊 AI Enhanced data: {paths['xml_path'].replace('_structure.xml', '_ai_enhanced.json')}"
+            )
+            print(
+                f"   📈 Progress tracking: {paths['xml_path'].replace('_structure.xml', '_progress.json')}"
+            )
+        else:
+            print("⚠️  AI not available, only XML structure created.")
+
+        print(f"\n✅ Processing complete!")
+        print(f"📁 All files organized in: {paths['main_dir']}")
+        print(f"   📄 XML: {os.path.basename(paths['xml_path'])}")
+
+        if use_ai and extractor.ai_model:
+            print(
+                f"   🤖 AI Enhanced JSON: {os.path.basename(paths['xml_path'].replace('_structure.xml', '_ai_enhanced.json'))}"
+            )
+            print(
+                f"   📈 Progress JSON: {os.path.basename(paths['xml_path'].replace('_structure.xml', '_progress.json'))}"
+            )
+
+        # Count images
+        if os.path.exists(paths["images_dir"]):
+            image_count = len(
+                [f for f in os.listdir(paths["images_dir"]) if f.endswith(".png")]
+            )
+            print(f"   🖼️  Images folder: {image_count} images")
+
+        print(f"\n🎉 Ready to explore your data!")
+        if extractor.ai_model:
+            print("   🤖 AI has intelligently matched images with related text")
+            print("   📊 The XML contains all structural data with coordinates")
+            print("   📈 Progress is saved after each page completion")
 
     # Timing: record end time and total elapsed
     end_ts = time.time()
@@ -1329,12 +1374,23 @@ if __name__ == "__main__":
     # Defaults
     pdf_path = "./input/Villeroy.pdf"
     use_ai_flag = True
-
+    add_category_flag = False
+    start_from_flag = 0
     # Parse simple CLI: first positional arg is PDF path; use --no-ai to disable AI
+
+    #add one condition for flag to directly start with adding category
     for a in sys.argv[1:]:
         if a in ("--no-ai", "--no_ai", "-n"):
             use_ai_flag = False
+        elif a in ("--add-category", "--add_category", "-c"):
+            add_category_flag = True
+        elif a.startswith("--start-from=") or a.startswith("--start_from=") or a.startswith("-s="):
+            start_from_flag = int(a.split("=")[1])
         elif not a.startswith("-"):
             pdf_path = a
 
-    main(pdf_path, use_ai=use_ai_flag)
+    print(f"Debug: start_from_flag = {start_from_flag}")
+    main(pdf_path, use_ai=use_ai_flag, add_category=add_category_flag, start_from=start_from_flag)
+
+
+

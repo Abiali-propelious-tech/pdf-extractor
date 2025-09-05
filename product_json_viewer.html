@@ -960,13 +960,16 @@
           return imagePath;
         }
 
+        // Normalize path separators (handle both Windows and Unix paths)
+        const normalizedPath = imagePath.replace(/\\/g, '/');
+        
         // Try to resolve from file map
-        const filename = imagePath.split("/").pop();
+        const filename = normalizedPath.split("/").pop();
         if (fileImageMap[filename]) {
           return URL.createObjectURL(fileImageMap[filename]);
         }
 
-        return imagePath; // Return as-is, might work if relative to HTML
+        return normalizedPath; // Return normalized path, might work if relative to HTML
       }
 
       function createImageCarousel(images, productTitle) {
@@ -1085,17 +1088,49 @@
         const productSlug = product.slug || "";
         const shortDescription = product.short_description || "";
         const productMaterials = product.product_materials || "";
-        const category = product.category || "";
-        const subCategory = product.sub_category || "";
         
-        // Handle multiple images (image1 through image5)
+        // Handle category and sub_category as objects
+        const category = product.category?.name || "";
+        const subCategory = product.sub_category?.name || "";
+        
+        // Handle multiple images (image1 through image5 and images array)
         const images = [];
+        
+        // First, try to get images from image1-image5 fields
         for (let i = 1; i <= 5; i++) {
           const imageKey = `image${i}`;
-          if (product[imageKey] && product[imageKey] !== "image_file_path_" + i) {
+          if (product[imageKey] && 
+              product[imageKey] !== "image_file_path_" + i && 
+              product[imageKey] !== null && 
+              product[imageKey] !== "" &&
+              product[imageKey] !== "null") {
             images.push(product[imageKey]);
           }
         }
+        
+        // If no images from image1-image5, try the images array
+        if (images.length === 0 && product.images && Array.isArray(product.images)) {
+          product.images.forEach(img => {
+            if (img && img !== null) {
+              images.push(img);
+            }
+          });
+        }
+        
+        // Also check product_color_image for additional images
+        if (images.length === 0 && product.product_color_image && Array.isArray(product.product_color_image)) {
+          product.product_color_image.forEach(variant => {
+            if (variant.product_color_image && 
+                variant.product_color_image !== null && 
+                variant.product_color_image !== "" &&
+                variant.product_color_image !== "null") {
+              images.push(variant.product_color_image);
+            }
+          });
+        }
+        
+        // Debug logging
+        console.log(`Product: ${productName}, Images found:`, images);
 
         // Create category section
         const categoryHtml = (category || subCategory) ? 
@@ -1173,7 +1208,7 @@
               </div>
             </div>
             
-            ${createImageCarousel(images, productName)}
+            ${images.length > 0 ? createImageCarousel(images, productName) : '<div class="carousel-container"><div class="no-image">No images available</div></div>'}
             
             <div class="card-content">
               ${categoryHtml}
@@ -1256,8 +1291,8 @@
               product.slug,
               product.short_description,
               product.product_materials,
-              product.category,
-              product.sub_category,
+              product.category?.name,
+              product.sub_category?.name,
               ...(product.product_colors || []).map(color => color.name),
               ...(product.product_color_image || []).map(variant => variant.product_color),
               product.product_features,
@@ -1274,12 +1309,12 @@
 
         // Apply category filter
         if (categoryFilterValue) {
-          filtered = filtered.filter(product => product.category === categoryFilterValue);
+          filtered = filtered.filter(product => product.category?.name === categoryFilterValue);
         }
 
         // Apply sub-category filter
         if (subCategoryFilterValue) {
-          filtered = filtered.filter(product => product.sub_category === subCategoryFilterValue);
+          filtered = filtered.filter(product => product.sub_category?.name === subCategoryFilterValue);
         }
 
         filteredProducts = filtered;
@@ -1304,8 +1339,8 @@
           allCategories.clear();
           allSubCategories.clear();
           products.forEach(product => {
-            if (product.category) allCategories.add(product.category);
-            if (product.sub_category) allSubCategories.add(product.sub_category);
+            if (product.category?.name) allCategories.add(product.category.name);
+            if (product.sub_category?.name) allSubCategories.add(product.sub_category.name);
           });
 
           updateCategoryFilters();
