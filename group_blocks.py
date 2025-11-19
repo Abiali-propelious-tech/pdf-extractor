@@ -59,7 +59,7 @@ class DSU:
         self.p[rb] = ra
 
 
-def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List[dict]:
+def group_page(page: dict, threshold: float = 5.0, mode: str = "expand") -> List[dict]:
     """Group image and text blocks on a page.
 
     Args:
@@ -99,12 +99,27 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
             a_key, a_bbox = texts[i]
             b_key, b_bbox = texts[j]
             try:
-                if mode == 'expand':
+                if mode == "expand":
                     ax0, ay0, ax1, ay1 = a_bbox
                     bx0, by0, bx1, by1 = b_bbox
-                    a_ex = (ax0 - threshold, ay0 - threshold, ax1 + threshold, ay1 + threshold)
-                    b_ex = (bx0 - threshold, by0 - threshold, bx1 + threshold, by1 + threshold)
-                    overlap = not (a_ex[2] < b_ex[0] or b_ex[2] < a_ex[0] or a_ex[3] < b_ex[1] or b_ex[3] < a_ex[1])
+                    a_ex = (
+                        ax0 - threshold,
+                        ay0 - threshold,
+                        ax1 + threshold,
+                        ay1 + threshold,
+                    )
+                    b_ex = (
+                        bx0 - threshold,
+                        by0 - threshold,
+                        bx1 + threshold,
+                        by1 + threshold,
+                    )
+                    overlap = not (
+                        a_ex[2] < b_ex[0]
+                        or b_ex[2] < a_ex[0]
+                        or a_ex[3] < b_ex[1]
+                        or b_ex[3] < a_ex[1]
+                    )
                     if overlap:
                         dsu.union(a_key, b_key)
                 else:
@@ -126,7 +141,12 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
             bx0, by0, bx1, by1 = b_bbox
             a_ex = (ax0 - threshold, ay0 - threshold, ax1 + threshold, ay1 + threshold)
             b_ex = (bx0 - threshold, by0 - threshold, bx1 + threshold, by1 + threshold)
-            overlap = not (a_ex[2] < b_ex[0] or b_ex[2] < a_ex[0] or a_ex[3] < b_ex[1] or b_ex[3] < a_ex[1])
+            overlap = not (
+                a_ex[2] < b_ex[0]
+                or b_ex[2] < a_ex[0]
+                or a_ex[3] < b_ex[1]
+                or b_ex[3] < a_ex[1]
+            )
             if overlap:
                 dsu.union(a_key, b_key)
 
@@ -177,7 +197,10 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
                     gap = tx0 - ix1
                     vert_overlap = max(0, min(ty1, iy1) - max(ty0, iy0))
                     img_h = iy1 - iy0 if iy1 > iy0 else 1.0
-                    if gap <= threshold * directional_multiplier and (vert_overlap >= img_h * (align_frac / 2) or abs(tcy - (iy0 + iy1) / 2.0) <= img_h * align_frac):
+                    if gap <= threshold * directional_multiplier and (
+                        vert_overlap >= img_h * (align_frac / 2)
+                        or abs(tcy - (iy0 + iy1) / 2.0) <= img_h * align_frac
+                    ):
                         best_img = i_key
                         break
                 # text is to the left
@@ -185,7 +208,10 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
                     gap = ix0 - tx1
                     vert_overlap = max(0, min(ty1, iy1) - max(ty0, iy0))
                     img_h = iy1 - iy0 if iy1 > iy0 else 1.0
-                    if gap <= threshold * directional_multiplier and (vert_overlap >= img_h * (align_frac / 2) or abs(tcy - (iy0 + iy1) / 2.0) <= img_h * align_frac):
+                    if gap <= threshold * directional_multiplier and (
+                        vert_overlap >= img_h * (align_frac / 2)
+                        or abs(tcy - (iy0 + iy1) / 2.0) <= img_h * align_frac
+                    ):
                         best_img = i_key
                         break
                 # text is below
@@ -193,7 +219,10 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
                     gap = ty0 - iy1
                     horiz_overlap = max(0, min(tx1, ix1) - max(tx0, ix0))
                     img_w = ix1 - ix0 if ix1 > ix0 else 1.0
-                    if gap <= threshold * directional_multiplier and (horiz_overlap >= img_w * (align_frac / 2) or abs(tcx - (ix0 + ix1) / 2.0) <= img_w * align_frac):
+                    if gap <= threshold * directional_multiplier and (
+                        horiz_overlap >= img_w * (align_frac / 2)
+                        or abs(tcx - (ix0 + ix1) / 2.0) <= img_w * align_frac
+                    ):
                         best_img = i_key
                         break
                 # text is above
@@ -201,7 +230,10 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
                     gap = iy0 - ty1
                     horiz_overlap = max(0, min(tx1, ix1) - max(tx0, ix0))
                     img_w = ix1 - ix0 if ix1 > ix0 else 1.0
-                    if gap <= threshold * directional_multiplier and (horiz_overlap >= img_w * (align_frac / 2) or abs(tcx - (ix0 + ix1) / 2.0) <= img_w * align_frac):
+                    if gap <= threshold * directional_multiplier and (
+                        horiz_overlap >= img_w * (align_frac / 2)
+                        or abs(tcx - (ix0 + ix1) / 2.0) <= img_w * align_frac
+                    ):
                         best_img = i_key
                         break
 
@@ -213,10 +245,10 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
     # include images
     for key, bbox in images:
         root = dsu.find(key)
-        comps.setdefault(root, []).append((key, bbox, 'image'))
+        comps.setdefault(root, []).append((key, bbox, "image"))
     for key, bbox in texts:
         root = dsu.find(key)
-        comps.setdefault(root, []).append((key, bbox, 'text'))
+        comps.setdefault(root, []).append((key, bbox, "text"))
 
     groups = []
     gid = 0
@@ -260,9 +292,9 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
     text_only_idxs = []
     img_only_idxs = []
     for i, g in enumerate(groups):
-        if len(g.get('images', [])) == 0 and len(g.get('texts', [])) > 0:
+        if len(g.get("images", [])) == 0 and len(g.get("texts", [])) > 0:
             text_only_idxs.append(i)
-        if len(g.get('images', [])) > 0 and len(g.get('texts', [])) == 0:
+        if len(g.get("images", [])) > 0 and len(g.get("texts", [])) == 0:
             img_only_idxs.append(i)
 
     merged = set()
@@ -277,23 +309,37 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
             if ji in merged:
                 continue
             ig = groups[ji]
-            d = rect_distance(tgroup['bbox'], ig['bbox'])
+            d = rect_distance(tgroup["bbox"], ig["bbox"])
             if best_d is None or d < best_d:
                 best_d = d
                 best_j = ji
-        if best_j is not None and best_d is not None and best_d <= threshold * large_multiplier:
+        if (
+            best_j is not None
+            and best_d is not None
+            and best_d <= threshold * large_multiplier
+        ):
             # merge ji into ti (attach image to the text group)
             ig = groups[best_j]
             # append images from ig into tgroup
-            tgroup['images'].extend(ig.get('images', []))
+            tgroup["images"].extend(ig.get("images", []))
             # recompute bbox
-            xs = [tgroup['bbox'][0], tgroup['bbox'][1], tgroup['bbox'][2], tgroup['bbox'][3]]
-            xs = [tgroup['bbox'][0], tgroup['bbox'][1], tgroup['bbox'][2], tgroup['bbox'][3]]
-            all_x0 = min(tgroup['bbox'][0], ig['bbox'][0])
-            all_y0 = min(tgroup['bbox'][1], ig['bbox'][1])
-            all_x1 = max(tgroup['bbox'][2], ig['bbox'][2])
-            all_y1 = max(tgroup['bbox'][3], ig['bbox'][3])
-            tgroup['bbox'] = [all_x0, all_y0, all_x1, all_y1]
+            xs = [
+                tgroup["bbox"][0],
+                tgroup["bbox"][1],
+                tgroup["bbox"][2],
+                tgroup["bbox"][3],
+            ]
+            xs = [
+                tgroup["bbox"][0],
+                tgroup["bbox"][1],
+                tgroup["bbox"][2],
+                tgroup["bbox"][3],
+            ]
+            all_x0 = min(tgroup["bbox"][0], ig["bbox"][0])
+            all_y0 = min(tgroup["bbox"][1], ig["bbox"][1])
+            all_x1 = max(tgroup["bbox"][2], ig["bbox"][2])
+            all_y1 = max(tgroup["bbox"][3], ig["bbox"][3])
+            tgroup["bbox"] = [all_x0, all_y0, all_x1, all_y1]
             merged.add(best_j)
 
     # Remove merged groups (those that were absorbed)
@@ -314,8 +360,16 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
     max_multiplier = 4096.0
     # outer loop: keep trying until no more lone pairs can be matched
     while True:
-        lone_img_idxs = [i for i, g in enumerate(groups_work) if len(g.get('images', [])) > 0 and len(g.get('texts', [])) == 0]
-        lone_txt_idxs = [i for i, g in enumerate(groups_work) if len(g.get('texts', [])) > 0 and len(g.get('images', [])) == 0]
+        lone_img_idxs = [
+            i
+            for i, g in enumerate(groups_work)
+            if len(g.get("images", [])) > 0 and len(g.get("texts", [])) == 0
+        ]
+        lone_txt_idxs = [
+            i
+            for i, g in enumerate(groups_work)
+            if len(g.get("texts", [])) > 0 and len(g.get("images", [])) == 0
+        ]
         if not lone_img_idxs or not lone_txt_idxs:
             break
 
@@ -329,7 +383,7 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
                 if ii >= len(groups_work):
                     continue
                 img_g = groups_work[ii]
-                ix0, iy0, ix1, iy1 = img_g['bbox']
+                ix0, iy0, ix1, iy1 = img_g["bbox"]
                 icx = (ix0 + ix1) / 2.0
                 icy = (iy0 + iy1) / 2.0
                 iw = max(1.0, ix1 - ix0)
@@ -340,7 +394,7 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
                     if j in used_txt or j >= len(groups_work):
                         continue
                     txt_g = groups_work[j]
-                    tx0, ty0, tx1, ty1 = txt_g['bbox']
+                    tx0, ty0, tx1, ty1 = txt_g["bbox"]
                     tcx = (tx0 + tx1) / 2.0
                     tcy = (ty0 + ty1) / 2.0
                     dx = tcx - icx
@@ -348,18 +402,24 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
                     # determine cardinal direction: prefer the axis with larger magnitude
                     if abs(dx) >= abs(dy):
                         # candidate is left/right
-                        d = rect_distance(img_g['bbox'], txt_g['bbox'])
+                        d = rect_distance(img_g["bbox"], txt_g["bbox"])
                         # vertical alignment check
                         vert_overlap = max(0, min(iy1, ty1) - max(iy0, ty0))
-                        if vert_overlap >= ih * (align_frac / 2) or abs(tcy - icy) <= ih * align_frac:
+                        if (
+                            vert_overlap >= ih * (align_frac / 2)
+                            or abs(tcy - icy) <= ih * align_frac
+                        ):
                             if d <= threshold * mult and (best_d is None or d < best_d):
                                 best_d = d
                                 best_j = j
                     else:
                         # candidate is top/bottom
-                        d = rect_distance(img_g['bbox'], txt_g['bbox'])
+                        d = rect_distance(img_g["bbox"], txt_g["bbox"])
                         horiz_overlap = max(0, min(ix1, tx1) - max(ix0, tx0))
-                        if horiz_overlap >= iw * (align_frac / 2) or abs(tcx - icx) <= iw * align_frac:
+                        if (
+                            horiz_overlap >= iw * (align_frac / 2)
+                            or abs(tcx - icx) <= iw * align_frac
+                        ):
                             if d <= threshold * mult and (best_d is None or d < best_d):
                                 best_d = d
                                 best_j = j
@@ -376,13 +436,13 @@ def group_page(page: dict, threshold: float = 5.0, mode: str = 'expand') -> List
                         continue
                     img_g = groups_work[ii]
                     txt_g = groups_work[jj]
-                    img_g['texts'].extend(txt_g.get('texts', []))
+                    img_g["texts"].extend(txt_g.get("texts", []))
                     # recompute bbox
-                    all_x0 = min(img_g['bbox'][0], txt_g['bbox'][0])
-                    all_y0 = min(img_g['bbox'][1], txt_g['bbox'][1])
-                    all_x1 = max(img_g['bbox'][2], txt_g['bbox'][2])
-                    all_y1 = max(img_g['bbox'][3], txt_g['bbox'][3])
-                    img_g['bbox'] = [all_x0, all_y0, all_x1, all_y1]
+                    all_x0 = min(img_g["bbox"][0], txt_g["bbox"][0])
+                    all_y0 = min(img_g["bbox"][1], txt_g["bbox"][1])
+                    all_x1 = max(img_g["bbox"][2], txt_g["bbox"][2])
+                    all_y1 = max(img_g["bbox"][3], txt_g["bbox"][3])
+                    img_g["bbox"] = [all_x0, all_y0, all_x1, all_y1]
                     remove_idxs.add(jj)
                 # remove absorbed text groups in descending order of index
                 for idx in sorted(remove_idxs, reverse=True):
