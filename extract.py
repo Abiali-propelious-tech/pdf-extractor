@@ -39,6 +39,12 @@ except ImportError:
     AI_AVAILABLE = False
     print("⚠️  AI features not available. Install: pip install langchain-google-genai")
 
+# Optional grouping helper used to post-process JSON into grouped blocks
+try:
+    import group_blocks as _group_blocks_module
+except Exception:
+    _group_blocks_module = None
+
 
 class PDFStructureExtractor:
     """
@@ -188,71 +194,125 @@ class PDFStructureExtractor:
 
             # Get page boundaries for validation
             page_rect = page.rect
-            
+
             # Get images that are actually ON this page
             image_list = page.get_images(full=True)
-            
+
+            # Tuning knobs via environment variables (with sensible defaults)
+            min_side_pts = float(os.getenv("PDF_EXTRACTOR_MIN_RECT_SIDE_PTS", "25"))
+            min_area_frac = float(
+                os.getenv("PDF_EXTRACTOR_MIN_RECT_AREA_FRAC", "0.001")
+            )
+            max_occ_per_xref = int(
+                os.getenv("PDF_EXTRACTOR_MAX_OCCURRENCES_PER_IMAGE", "1")
+            )
+
+            # Per-page visual dedup using simple perceptual hash (dhash)
+            seen_hashes = set()
+
+            # Helper: compute IoU between two rectangles
+            def _rect_iou(r1: fitz.Rect, r2: fitz.Rect) -> float:
+                ix0 = max(r1.x0, r2.x0)
+                iy0 = max(r1.y0, r2.y0)
+                ix1 = min(r1.x1, r2.x1)
+                iy1 = min(r1.y1, r2.y1)
+                iw = max(0.0, ix1 - ix0)
+                ih = max(0.0, iy1 - iy0)
+                inter = iw * ih
+                a1 = max(0.0, r1.width) * max(0.0, r1.height)
+                a2 = max(0.0, r2.width) * max(0.0, r2.height)
+                union = a1 + a2 - inter if (a1 + a2 - inter) > 0 else 0.0
+                return inter / union if union > 0 else 0.0
+
         except Exception:
             image_list = []
 
         # Track processed xrefs to avoid duplicates
         processed_xrefs = set()
+        # Track seen bboxes to avoid repeating identical failed entries
+        seen_bboxes = set()
 
         for img_index, img in enumerate(image_list):
             try:
                 xref = img[0]
-                
+
                 # Skip if we've already processed this xref on this page
                 if xref in processed_xrefs:
                     continue
-                    
+
                 # Get all rectangles where this image appears
                 img_rects = page.get_image_rects(xref)
                 if not img_rects:
                     continue
-                    
+
                 # Filter rectangles to only include those that are actually within the page bounds
+                # and have sufficient size (absolute min side and page-relative area)
                 valid_rects = []
+                page_area = (
+                    page_rect.width * page_rect.height
+                    if page_rect.width and page_rect.height
+                    else 0
+                )
                 for rect in img_rects:
                     # Check if rectangle is within page boundaries with some tolerance
                     tolerance = 1.0  # PDF points
-                    if (rect.x0 >= page_rect.x0 - tolerance and 
-                        rect.y0 >= page_rect.y0 - tolerance and 
-                        rect.x1 <= page_rect.x1 + tolerance and 
-                        rect.y1 <= page_rect.y1 + tolerance):
-                        # Also check if rectangle has reasonable dimensions
-                        if rect.width > 1 and rect.height > 1:
-                            valid_rects.append(rect)
-                
+                    if not (
+                        rect.x0 >= page_rect.x0 - tolerance
+                        and rect.y0 >= page_rect.y0 - tolerance
+                        and rect.x1 <= page_rect.x1 + tolerance
+                        and rect.y1 <= page_rect.y1 + tolerance
+                    ):
+                        continue
+                    # Absolute min side in points
+                    if rect.width < min_side_pts or rect.height < min_side_pts:
+                        continue
+                    # Page-relative area threshold
+                    if page_area > 0 and (rect.width * rect.height) < (
+                        page_area * min_area_frac
+                    ):
+                        continue
+                    valid_rects.append(rect)
+
                 # Skip if no valid rectangles found on this page
                 if not valid_rects:
                     continue
-                    
+
                 # Mark this xref as processed
                 processed_xrefs.add(xref)
-                
-                # Process each valid rectangle occurrence
-                for r_idx, rect in enumerate(valid_rects):
+
+                # Reduce overlaps using a simple non-maximum suppression; keep largest areas first
+                valid_rects.sort(key=lambda r: (r.width * r.height), reverse=True)
+                nms_kept = []
+                for r in valid_rects:
+                    if all(_rect_iou(r, k) < 0.5 for k in nms_kept):
+                        nms_kept.append(r)
+                    if len(nms_kept) >= max_occ_per_xref:
+                        break
+
+                # Process each selected rectangle occurrence
+                for r_idx, rect in enumerate(nms_kept):
+
                     try:
                         # Create unique image filename for this occurrence
                         image_filename = os.path.join(
                             image_folder,
                             f"page_{page_num+1}_image_{img_index}_{r_idx}.png",
                         )
-                        
+
                         # Extract image using page clipping (more accurate)
                         pad = 0.5  # Small padding for anti-aliasing
                         clip_rect = fitz.Rect(
                             max(rect.x0 - pad, page_rect.x0),
-                            max(rect.y0 - pad, page_rect.y0), 
+                            max(rect.y0 - pad, page_rect.y0),
                             min(rect.x1 + pad, page_rect.x1),
-                            min(rect.y1 + pad, page_rect.y1)
+                            min(rect.y1 + pad, page_rect.y1),
                         )
 
                         # Render at higher resolution for better quality
                         zoom = 2  # 2x resolution
                         mat = fitz.Matrix(zoom, zoom)
-                        
+
+                        extraction_success = False
                         try:
                             # Extract by clipping the page (most accurate method)
                             clipped_pix = page.get_pixmap(
@@ -261,7 +321,6 @@ class PDFStructureExtractor:
                             clipped_pix.save(image_filename)
                             extraction_success = True
                             clipped_pix = None  # Free memory
-                            
                         except Exception:
                             # Fallback: try to extract the raw image object
                             try:
@@ -277,26 +336,260 @@ class PDFStructureExtractor:
                             except Exception:
                                 extraction_success = False
 
-                        # Create XML element only if extraction was successful
+                        # Simple color shade filter: skip images with very few unique colors (likely text)
                         if extraction_success:
-                            img_block = ET.Element("image_block")
-                            img_block.set("id", f"img_{page_num}_{img_index}_{r_idx}")
-                            img_block.set(
-                                "bbox",
-                                f"{rect.x0:.1f},{rect.y0:.1f},{rect.x1:.1f},{rect.y1:.1f}",
-                            )
-                            img_block.set("width", f"{rect.width:.1f}")
-                            img_block.set("height", f"{rect.height:.1f}")
-                            img_block.set("file", image_filename)
-                            img_block.set("xref", str(xref))  # Add xref for debugging
-                            page_elem.append(img_block)
+                            try:
+                                from PIL import Image as PILImage
+                                import numpy as np
+
+                                with PILImage.open(image_filename) as img:
+                                    arr = np.array(img.convert("RGB"))
+                                    pixels = arr.reshape(-1, arr.shape[2])
+                                    unique_colors = len(np.unique(pixels, axis=0))
+                                    print(
+                                        f"Image {os.path.basename(image_filename)} unique color count: {unique_colors}"
+                                    )
+                                    # If image has very few unique colors (<=3), skip (likely text)
+                                    if unique_colors <= 3:
+                                        print(
+                                            f"   🗑️  Skipped {os.path.basename(image_filename)}: only {unique_colors} unique colors (likely text)"
+                                        )
+                                        extraction_success = False
+                                        try:
+                                            os.remove(image_filename)
+                                        except Exception:
+                                            pass
+                            except Exception as e:
+                                print(
+                                    f"   ⚠️  Color count check failed for {os.path.basename(image_filename)}: {e}"
+                                )
+
+                        # Visual dedup across the page using a lightweight dhash
+                        if extraction_success:
+                            try:
+                                from PIL import Image as _PIL
+                                import numpy as _np
+
+                                with _PIL.open(image_filename) as _im:
+                                    g = _im.convert("L").resize(
+                                        (9, 8), _PIL.Resampling.LANCZOS
+                                    )
+                                    garr = _np.array(g)
+                                    diff = garr[:, 1:] > garr[:, :-1]
+                                    bits = "".join(
+                                        "1" if v else "0" for v in diff.flatten()
+                                    )
+                                    dhash_hex = f"{int(bits, 2):0{len(bits)//4}x}"
+                                if dhash_hex in seen_hashes:
+                                    # Duplicate visual content; remove file and skip
+                                    try:
+                                        os.remove(image_filename)
+                                    except Exception:
+                                        pass
+                                    extraction_success = False
+                                else:
+                                    seen_hashes.add(dhash_hex)
+                            except Exception:
+                                # Fail-open if hashing fails
+                                pass
+
+                        # If extraction succeeded, attempt to detect text-like/ghost images and optionally OCR them
+                        if extraction_success:
+                            try:
+                                # If image looks like a ghost/text artifact, convert it to a text block
+                                is_ghost = False
+                                try:
+                                    is_ghost = self._is_ghost_or_text_image(
+                                        image_filename
+                                    )
+                                except Exception:
+                                    is_ghost = False
+
+                                if is_ghost:
+                                    ocr_text = ""
+                                    if self.ocr_available:
+                                        try:
+                                            with Image.open(image_filename) as _ocr_img:
+                                                # Allow pytesseract to extract whatever text is present
+                                                ocr_text = pytesseract.image_to_string(
+                                                    _ocr_img
+                                                )
+                                        except Exception:
+                                            ocr_text = ""
+
+                                    # Remove the visual file since it's a text artifact
+                                    try:
+                                        os.remove(image_filename)
+                                    except Exception:
+                                        pass
+
+                                    # If OCR found text, add it as a text_block into the XML
+                                    if ocr_text and ocr_text.strip():
+                                        tb = ET.Element("text_block")
+                                        tb.set(
+                                            "id",
+                                            f"text_ocr_{page_num}_{img_index}_{r_idx}",
+                                        )
+                                        tb.set(
+                                            "bbox",
+                                            f"{rect.x0:.1f},{rect.y0:.1f},{rect.x1:.1f},{rect.y1:.1f}",
+                                        )
+                                        tb.set("font", "")
+                                        tb.set("size", "")
+                                        tb.set("type", "ocr_text")
+                                        tb.text = ocr_text.strip()
+                                        page_elem.append(tb)
+                                    else:
+                                        # No OCR text found; mark as skipped (no image element)
+                                        pass
+
+                                    # Do not create an image_block for ghost/text images
+                                    extraction_success = False
+                                else:
+                                    # Create XML element for a real image
+                                    img_block = ET.Element("image_block")
+                                    img_block.set(
+                                        "id", f"img_{page_num}_{img_index}_{r_idx}"
+                                    )
+                                    img_block.set(
+                                        "bbox",
+                                        f"{rect.x0:.1f},{rect.y0:.1f},{rect.x1:.1f},{rect.y1:.1f}",
+                                    )
+                                    img_block.set("width", f"{rect.width:.1f}")
+                                    img_block.set("height", f"{rect.height:.1f}")
+                                    img_block.set("file", image_filename)
+                                    img_block.set(
+                                        "xref", str(xref)
+                                    )  # Add xref for debugging
+                                    page_elem.append(img_block)
+                            except Exception as e:
+                                print(
+                                    f"⚠️ Image post-processing failed for {image_filename}: {e}"
+                                )
+                                # Fallback to a failed marker (so downstream tooling knows something was here)
+                                img_block = ET.Element("image_block")
+                                img_block.set(
+                                    "id", f"img_{page_num}_{img_index}_{r_idx}"
+                                )
+                                img_block.set(
+                                    "bbox",
+                                    f"{rect.x0:.1f},{rect.y0:.1f},{rect.x1:.1f},{rect.y1:.1f}",
+                                )
+                                img_block.set("width", f"{rect.width:.1f}")
+                                img_block.set("height", f"{rect.height:.1f}")
+                                img_block.set("file", "extraction_failed")
+                                img_block.set("xref", str(xref))
+                                page_elem.append(img_block)
                         else:
-                            # Create element marking extraction failure
+                            # Try fallback: crop the saved full-page image and attempt ghost detection / OCR
+                            bbox_str = f"{rect.x0:.1f},{rect.y0:.1f},{rect.x1:.1f},{rect.y1:.1f}"
+                            # Avoid repeating the same failed bbox many times
+                            if bbox_str in seen_bboxes:
+                                continue
+                            seen_bboxes.add(bbox_str)
+
+                            try:
+                                full_page_img_path = os.path.join(
+                                    image_folder, f"page_{page_num+1}_full.png"
+                                )
+                                fallback_text = ""
+                                fallback_detected = False
+                                if os.path.exists(full_page_img_path):
+                                    try:
+                                        from PIL import Image as _PIL
+
+                                        with _PIL.open(full_page_img_path) as _full:
+                                            fw, fh = _full.size
+                                            # Compute scale from PDF points to full image pixels
+                                            try:
+                                                scale_x = fw / (
+                                                    page_rect.width
+                                                    if page_rect.width
+                                                    else 1
+                                                )
+                                                scale_y = fh / (
+                                                    page_rect.height
+                                                    if page_rect.height
+                                                    else 1
+                                                )
+                                            except Exception:
+                                                scale_x = scale_y = 2
+
+                                            crop_box = (
+                                                int(max(0, rect.x0 * scale_x)),
+                                                int(max(0, rect.y0 * scale_y)),
+                                                int(min(fw, rect.x1 * scale_x)),
+                                                int(min(fh, rect.y1 * scale_y)),
+                                            )
+                                            if (
+                                                crop_box[2] > crop_box[0]
+                                                and crop_box[3] > crop_box[1]
+                                            ):
+                                                crop = _full.crop(crop_box)
+                                                tmp_crop_path = os.path.join(
+                                                    image_folder,
+                                                    f"page_{page_num+1}_crop_fallback_{img_index}_{r_idx}.png",
+                                                )
+                                                crop.save(tmp_crop_path)
+                                                # Run ghost detection on the crop
+                                                try:
+                                                    if self._is_ghost_or_text_image(
+                                                        tmp_crop_path
+                                                    ):
+                                                        fallback_detected = True
+                                                except Exception:
+                                                    fallback_detected = False
+
+                                                # If detected as ghost/text and OCR available, try to OCR
+                                                if (
+                                                    fallback_detected
+                                                    and self.ocr_available
+                                                ):
+                                                    try:
+                                                        with Image.open(
+                                                            tmp_crop_path
+                                                        ) as _ocr_img:
+                                                            fallback_text = pytesseract.image_to_string(
+                                                                _ocr_img
+                                                            )
+                                                    except Exception:
+                                                        fallback_text = ""
+                                                # Remove the temporary crop file
+                                                try:
+                                                    os.remove(tmp_crop_path)
+                                                except Exception:
+                                                    pass
+                                    except Exception:
+                                        pass
+
+                                # If fallback OCR found text, append as text_block
+                                if fallback_text and fallback_text.strip():
+                                    tb = ET.Element("text_block")
+                                    tb.set(
+                                        "id",
+                                        f"text_ocr_fallback_{page_num}_{img_index}_{r_idx}",
+                                    )
+                                    tb.set(
+                                        "bbox",
+                                        bbox_str,
+                                    )
+                                    tb.set("font", "")
+                                    tb.set("size", "")
+                                    tb.set("type", "ocr_text")
+                                    tb.text = fallback_text.strip()
+                                    page_elem.append(tb)
+                                    continue
+                            except Exception as e:
+                                print(
+                                    f"     ⚠️ Fallback crop/OCR failed for bbox {bbox_str}: {e}"
+                                )
+
+                            # If fallback didn't yield text, add a single extraction_failed marker for this bbox
                             img_block = ET.Element("image_block")
                             img_block.set("id", f"img_{page_num}_{img_index}_{r_idx}")
                             img_block.set(
                                 "bbox",
-                                f"{rect.x0:.1f},{rect.y0:.1f},{rect.x1:.1f},{rect.y1:.1f}",
+                                bbox_str,
                             )
                             img_block.set("width", f"{rect.width:.1f}")
                             img_block.set("height", f"{rect.height:.1f}")
@@ -305,11 +598,15 @@ class PDFStructureExtractor:
                             page_elem.append(img_block)
 
                     except Exception as e:
-                        print(f"⚠️ Failed to process image {img_index}_{r_idx} on page {page_num+1}: {e}")
+                        print(
+                            f"⚠️ Failed to process image {img_index}_{r_idx} on page {page_num+1}: {e}"
+                        )
                         continue
 
             except Exception as e:
-                print(f"⚠️ Failed to process image {img_index} on page {page_num+1}: {e}")
+                print(
+                    f"⚠️ Failed to process image {img_index} on page {page_num+1}: {e}"
+                )
                 continue
 
         return page_elem
@@ -394,6 +691,93 @@ class PDFStructureExtractor:
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(pretty_xml)
 
+    def xml_to_json(self, xml_path: str, out_path: str = None) -> str:
+        """Convert an extractor XML file to a simple JSON structure.
+
+        Returns the path to the written JSON file.
+        """
+        try:
+            tree = ET.parse(xml_path)
+            root = tree.getroot()
+        except Exception as e:
+            raise
+
+        data = {}
+        data["source"] = root.get("source") or xml_path
+        data["total_pages"] = int(root.get("total_pages", 0))
+        pages = []
+
+        for p in root.findall("page"):
+            try:
+                page_number = int(p.get("number") or 0)
+            except Exception:
+                page_number = 0
+            page_obj = {
+                "page_number": page_number,
+                "width": float(p.get("width") or 0),
+                "height": float(p.get("height") or 0),
+                "images": [],
+                "texts": [],
+            }
+            # attach a full-page snapshot path if it exists (images/page_{n}_full.png)
+            try:
+                xml_dir = os.path.dirname(xml_path) or '.'
+                candidate = os.path.join(xml_dir, 'images', f'page_{page_number}_full.png')
+                if os.path.exists(candidate):
+                    page_obj['full_image'] = candidate
+            except Exception:
+                pass
+
+            for img in p.findall("image_block"):
+                bbox_attr = img.get("bbox") or ""
+                bbox = (
+                    [float(x) for x in bbox_attr.split(",") if x.strip()]
+                    if bbox_attr
+                    else []
+                )
+                page_obj["images"].append(
+                    {
+                        "id": img.get("id"),
+                        "bbox": bbox,
+                        "width": float(img.get("width")) if img.get("width") else None,
+                        "height": (
+                            float(img.get("height")) if img.get("height") else None
+                        ),
+                        "file": img.get("file"),
+                        "xref": img.get("xref"),
+                    }
+                )
+
+            for tb in p.findall("text_block"):
+                bbox_attr = tb.get("bbox") or ""
+                bbox = (
+                    [float(x) for x in bbox_attr.split(",") if x.strip()]
+                    if bbox_attr
+                    else []
+                )
+                page_obj["texts"].append(
+                    {
+                        "id": tb.get("id"),
+                        "content": tb.text or "",
+                        "type": tb.get("type"),
+                        "bbox": bbox,
+                        "font": tb.get("font"),
+                        "size": tb.get("size"),
+                    }
+                )
+
+            pages.append(page_obj)
+
+        data["pages"] = pages
+
+        if not out_path:
+            out_path = os.path.splitext(xml_path)[0] + ".json"
+
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+        return out_path
+
     def encode_image_to_base64(self, image_path):
         """Encode image to base64 for AI analysis"""
         try:
@@ -414,7 +798,6 @@ class PDFStructureExtractor:
         except Exception as e:
             print(f"Error encoding image {image_path}: {e}")
             return None
-
 
     def analyze_page_with_ai(self, page_data, colors):
         """Use AI to intelligently match images with related text"""
@@ -480,7 +863,7 @@ class PDFStructureExtractor:
             content_parts = [
                 {
                     "type": "text",
-                        "text": f"""You are an expert in analyzing PDF catalogue pages with advanced product identification and consolidation capabilities. You will receive:
+                    "text": f"""You are an expert in analyzing PDF catalogue pages with advanced product identification and consolidation capabilities. You will receive:
                         1. A full page image showing the complete layout
                         2. XML data with all text blocks and their coordinates, plus extracted image information
 
@@ -688,8 +1071,6 @@ class PDFStructureExtractor:
 
         return formatted
 
-
-
     def format_page_xml_for_ai(self, page_data):
         """Format page XML data for AI analysis"""
         formatted = f"PAGE {page_data['page_number']} - Dimensions: {page_data['width']}x{page_data['height']}\n\n"
@@ -791,11 +1172,7 @@ class PDFStructureExtractor:
                 }"""
 
             # Variables to send with the query
-            variables = {
-                "pagination": {
-                    "limit": -1  
-                }
-            }
+            variables = {"pagination": {"limit": -1}}
 
             try:
                 result = graphql_requester(query, variables)
@@ -854,6 +1231,181 @@ class PDFStructureExtractor:
 
         return all_products
 
+    def _is_ghost_or_text_image(self, image_path: str) -> bool:
+        """
+        Detect if an image is likely a ghost/text artifact by analyzing multiple signals:
+        - Color variance (low = monochrome/ghost)
+        - Edge density (very sparse or very dense = text/noise)
+        - White/black dominance
+        - Histogram concentration
+        - Saturation (grayscale-ish)
+        - Extreme aspect ratios
+        Decision uses a simple voting scheme to avoid false-positives on product images with white backgrounds.
+        Returns True if image should be filtered out.
+        """
+        try:
+            from PIL import Image as PILImage
+            import numpy as np
+        except ImportError:
+            # If dependencies missing, skip ghost detection
+            return False
+
+        try:
+            # Configure sensitivity via environment variable
+            mode = os.getenv("PDF_EXTRACTOR_GHOST_MODE", "light").lower()
+            dbg = os.getenv("PDF_EXTRACTOR_DEBUG_GHOST", "").lower() in (
+                "1",
+                "true",
+                "yes",
+                "y",
+            )
+
+            # Threshold presets per mode
+            if mode == "strict":
+                color_std_thresh = 25
+                light_ratio_thresh = 0.70
+                dark_ratio_thresh = 0.70
+                edge_low, edge_high = 0.02, 0.30
+                unique_colors_thresh = 8
+                top10_ratio_thresh = 0.80
+                saturation_thresh = 30
+            elif mode == "balanced":
+                color_std_thresh = 22
+                light_ratio_thresh = 0.85
+                dark_ratio_thresh = 0.85
+                edge_low, edge_high = 0.015, 0.35
+                unique_colors_thresh = 6
+                top10_ratio_thresh = 0.85
+                saturation_thresh = 25
+            else:  # light (default)
+                color_std_thresh = 15
+                light_ratio_thresh = 0.92
+                dark_ratio_thresh = 0.92
+                edge_low, edge_high = 0.01, 0.45
+                unique_colors_thresh = 5
+                top10_ratio_thresh = 0.90
+                saturation_thresh = 20
+
+            with PILImage.open(image_path) as img:
+                # Convert to RGB for consistent analysis
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+
+                # Get original dimensions for aspect ratio check
+                orig_width, orig_height = img.size
+                aspect_ratio = max(orig_width, orig_height) / min(
+                    orig_width, orig_height
+                )
+
+                # We'll collect all triggered reasons, then decide by mode (voting)
+                reasons = []
+
+                # Resize to reasonable analysis size (faster, still accurate)
+                img.thumbnail((200, 200), PILImage.Resampling.LANCZOS)
+                arr = np.array(img)
+
+                # 1. Check color variance (ghost images are near-monochrome)
+                # Calculate std deviation across RGB channels
+                color_std = np.std(arr, axis=(0, 1))  # std per channel
+                avg_color_std = np.mean(color_std)
+
+                if avg_color_std < color_std_thresh:  # Low variance = flat/monochrome
+                    reasons.append(
+                        f"color_std {avg_color_std:.1f} < {color_std_thresh}"
+                    )
+
+                # 2. Check white/background dominance
+                # Count pixels that are very light (near-white)
+                light_threshold = 235  # RGB > 235 = very light
+                light_pixels = np.all(arr > light_threshold, axis=2)
+                light_ratio = np.sum(light_pixels) / (arr.shape[0] * arr.shape[1])
+
+                if light_ratio > light_ratio_thresh:
+                    reasons.append(
+                        f"light_ratio {light_ratio:.2f} > {light_ratio_thresh}"
+                    )
+
+                # 2b. Check for near-black dominance (dark text on dark bg)
+                dark_threshold = 30
+                dark_pixels = np.all(arr < dark_threshold, axis=2)
+                dark_ratio = np.sum(dark_pixels) / (arr.shape[0] * arr.shape[1])
+                if dark_ratio > dark_ratio_thresh:
+                    reasons.append(f"dark_ratio {dark_ratio:.2f} > {dark_ratio_thresh}")
+
+                # 3. Check edge density (text has specific patterns)
+                try:
+                    import cv2
+
+                    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                    edges = cv2.Canny(gray, 50, 150)
+                    edge_density = np.sum(edges > 0) / (edges.shape[0] * edges.shape[1])
+
+                    if edge_density < edge_low:  # Almost no edges = blank/uniform
+                        reasons.append(f"edge_density {edge_density:.3f} < {edge_low}")
+                    if edge_density > edge_high:  # Too many edges = text/noise
+                        reasons.append(f"edge_density {edge_density:.3f} > {edge_high}")
+
+                except ImportError:
+                    # OpenCV not available, skip edge check
+                    pass
+
+                # 4. Check for pure black/white binary image (scanned text)
+                unique_colors = len(np.unique(arr.reshape(-1, arr.shape[2]), axis=0))
+                if unique_colors < unique_colors_thresh:
+                    reasons.append(
+                        f"unique_colors {unique_colors} < {unique_colors_thresh}"
+                    )
+
+                # 5. Check histogram distribution - text images have bimodal distribution
+                gray_arr = np.mean(arr, axis=2).astype(np.uint8)
+                hist, _ = np.histogram(gray_arr, bins=256, range=(0, 256))
+                # Normalize histogram
+                hist = hist / (arr.shape[0] * arr.shape[1])
+
+                # Check if most pixels are concentrated in very few intensity levels
+                # Sort histogram and check if top 10 bins contain >80% of pixels
+                sorted_hist = np.sort(hist)[::-1]
+                top_10_ratio = np.sum(sorted_hist[:10])
+                if top_10_ratio > top10_ratio_thresh:  # Too concentrated = likely text
+                    reasons.append(
+                        f"top10_ratio {top_10_ratio:.2f} > {top10_ratio_thresh}"
+                    )
+
+                # 6. Check for low saturation (grayscale-ish images are often text)
+                hsv = img.convert("HSV")
+                hsv_arr = np.array(hsv)
+                saturation = hsv_arr[:, :, 1]
+                avg_saturation = np.mean(saturation)
+
+                # Low saturation = grayscale = likely text
+                if avg_saturation < saturation_thresh:
+                    reasons.append(
+                        f"saturation {avg_saturation:.1f} < {saturation_thresh}"
+                    )
+
+                # 7. Extreme aspect ratios often indicate text snippets or UI elements
+                if aspect_ratio > 8:
+                    reasons.append(f"aspect_ratio {aspect_ratio:.1f} > 8")
+
+                # Decide using a simple voting rule to reduce false-positives
+                votes = len(reasons)
+                if mode == "strict":
+                    decision = votes >= 1
+                elif mode == "balanced":
+                    decision = votes >= 2
+                else:  # light
+                    decision = votes >= 2
+
+                if dbg and decision:
+                    print(
+                        f"     ghost[{mode}] removing {os.path.basename(image_path)} due to: {', '.join(reasons)}"
+                    )
+                return decision
+
+        except Exception as e:
+            print(f"     ⚠️ Ghost detection failed for {image_path}: {e}")
+            return False  # Conservative: don't filter if analysis fails
+
     def filter_small_images(
         self,
         image_folder: str,
@@ -862,7 +1414,9 @@ class PDFStructureExtractor:
         remove_files: bool = True,
     ) -> set:
         """
-        Scan `image_folder` for common image files, delete those where width < min_dim or height < min_dim,
+        Scan `image_folder` for common image files, delete those where:
+        - width < min_dim or height < min_dim (size filter)
+        - OR detected as ghost/text artifact (ghost filter)
         and remove references to those files from the XML at `xml_path`.
         Returns a set of basenames that were removed (or would be removed).
         """
@@ -873,32 +1427,86 @@ class PDFStructureExtractor:
 
         patterns = ("*.png", "*.jpg", "*.jpeg", "*.tiff", "*.bmp", "*.gif", "*.webp")
 
+        # Determine if ghost/text filter should be enabled via env flag
+        ghost_env = os.getenv("PDF_EXTRACTOR_GHOST_FILTER", "")
+        enable_ghost_filter = ghost_env.lower() in ("1", "true", "yes", "y")
+
+        # Skip ghost filtering on clearly large images (likely product photos)
+        ghost_skip_min_pixels = int(
+            os.getenv("PDF_EXTRACTOR_GHOST_SKIP_MIN_PIXELS", "80000")
+        )
+        ghost_skip_min_side = int(os.getenv("PDF_EXTRACTOR_GHOST_SKIP_MIN_SIDE", "300"))
+
+        print(
+            "   🔍 Applying image filters: size"
+            + (
+                " + ghost detection"
+                if enable_ghost_filter
+                else " (ghost detection OFF)"
+            )
+            + "..."
+        )
+        ghost_count = 0
+        size_count = 0
+
         for pat in patterns:
             for path in glob.glob(os.path.join(image_folder, pat)):
                 try:
-                    # Prefer PIL for accurate size
+                    # Get image dimensions
                     from PIL import Image as _PILImage
 
                     with _PILImage.open(path) as _im:
                         w, h = _im.size
                 except Exception:
-                    # If PIL not available or fails, try to approximate via file size or skip
                     try:
                         import fitz
 
                         pix = fitz.Pixmap(path)
                         w, h = getattr(pix, "width", 0), getattr(pix, "height", 0)
                     except Exception:
-                        # Can't determine size -> skip conservative
                         continue
 
+                should_remove = False
+                removal_reason = ""
+
+                basename = os.path.basename(path)
+                is_full_page_image = "full" in basename
+
+                # Always keep the full-page snapshot for analysis/debugging
+                if is_full_page_image:
+                    continue
+
+                # Size filter
                 if w < min_dim or h < min_dim:
+                    should_remove = True
+                    removal_reason = "size"
+                    size_count += 1
+
+                # Ghost/text filter (only check if size is OK and feature enabled)
+                elif enable_ghost_filter:
+                    # Protect large images from ghost removal
+                    if (w * h) >= ghost_skip_min_pixels or max(
+                        w, h
+                    ) >= ghost_skip_min_side:
+                        pass  # keep large images
+                    elif self._is_ghost_or_text_image(path):
+                        should_remove = True
+                        removal_reason = "ghost"
+                        ghost_count += 1
+
+                if should_remove:
                     removed_basenames.add(os.path.basename(path))
                     if remove_files:
                         try:
                             os.remove(path)
+                            # Optional: print each removal for debugging
+                            # print(f"     🗑️  Removed ({removal_reason}): {os.path.basename(path)}")
                         except Exception:
                             pass
+
+        print(
+            f"   📊 Filtered totals: {size_count} too small, {ghost_count} ghost/text artifacts"
+        )
 
         # Update XML: remove any <image_block> whose @file basename is in removed_basenames
         if os.path.exists(xml_path) and removed_basenames:
@@ -979,7 +1587,7 @@ class PDFStructureExtractor:
             remove_files=remove_files,
         )
 
-    def add_product_category(self, json_path: str, start_from = 0):
+    def add_product_category(self, json_path: str, start_from=0):
         """Add product category to the JSON file"""
         categories = self.get_categories()
 
@@ -990,7 +1598,8 @@ class PDFStructureExtractor:
         print(f"Debug: start_from parameter = {start_from}")
         print(f"🏷️  Starting categorization for {total_products} products...")
 
-        system_message = SystemMessage(content=f"""You are a product categorization AI. You will receive a product JSON object containing name, description, materials, features, and other details, along with an array of objects with name and documentId of categories. 
+        system_message = SystemMessage(
+            content=f"""You are a product categorization AI. You will receive a product JSON object containing name, description, materials, features, and other details, along with an array of objects with name and documentId of categories. 
 
 CRITICAL REQUIREMENTS:
 - You MUST respond with ONLY valid JSON format
@@ -1005,49 +1614,72 @@ RESPONSE FORMAT (return exactly this structure):
 
 Available categories: {categories}
 
-Remember: Respond with ONLY the JSON object, nothing else.""")
+Remember: Respond with ONLY the JSON object, nothing else."""
+        )
 
         for index, product in enumerate(products[start_from:], start_from + 1):
             try:
-                print(f"   📝 Processing product {index}/{total_products}: {product.get('name', 'Unknown')}")
-                
+                print(
+                    f"   📝 Processing product {index}/{total_products}: {product.get('name', 'Unknown')}"
+                )
+
                 human_message = HumanMessage(content=f"""Product: {product}""")
-                
+
                 # Get AI response with retry logic for category
                 import time
+
                 max_retries = 3
                 category_response = None
-                
+
                 for attempt in range(max_retries):
                     try:
-                        category_response = self.ai_model.invoke([system_message, human_message])
+                        category_response = self.ai_model.invoke(
+                            [system_message, human_message]
+                        )
                         break
                     except Exception as e:
                         if attempt < max_retries - 1:
-                            print(f"     ⚠️ Category API call failed (attempt {attempt + 1}), retrying in 5 seconds...")
+                            print(
+                                f"     ⚠️ Category API call failed (attempt {attempt + 1}), retrying in 5 seconds..."
+                            )
                             time.sleep(5)
                             continue
                         else:
-                            print(f"     ❌ Category API call failed after {max_retries} attempts: {e}")
+                            print(
+                                f"     ❌ Category API call failed after {max_retries} attempts: {e}"
+                            )
                             raise e
-                
+
                 if category_response:
-                    parsed_category = parse_ai_json_response(category_response.content, "category", expected_keys=["name", "documentId"])
+                    parsed_category = parse_ai_json_response(
+                        category_response.content,
+                        "category",
+                        expected_keys=["name", "documentId"],
+                    )
                     if parsed_category:
                         product["category"] = parsed_category
                     else:
-                        print(f"     ⚠️ Failed to parse category for product {index}/{total_products}")
+                        print(
+                            f"     ⚠️ Failed to parse category for product {index}/{total_products}"
+                        )
                         # Try fallback: ask AI to choose from a simplified list
-                        fallback_category = self._fallback_category_selection(product, categories)
+                        fallback_category = self._fallback_category_selection(
+                            product, categories
+                        )
                         if fallback_category:
                             product["category"] = fallback_category
-                            print(f"     ✅ Fallback category selected: {fallback_category}")
+                            print(
+                                f"     ✅ Fallback category selected: {fallback_category}"
+                            )
                         else:
-                            print(f"     ❌ No category could be determined for product {index}/{total_products}")
+                            print(
+                                f"     ❌ No category could be determined for product {index}/{total_products}"
+                            )
                             continue
 
                     sub_categories = self.get_sub_categories(product["category"])
-                    sub_category_system_message = SystemMessage(content=f"""You are a product sub categorization AI. You will receive a product JSON object containing name, description, materials, features, and other details, along with an array of objects with name and documentId of sub categories.
+                    sub_category_system_message = SystemMessage(
+                        content=f"""You are a product sub categorization AI. You will receive a product JSON object containing name, description, materials, features, and other details, along with an array of objects with name and documentId of sub categories.
 
 CRITICAL REQUIREMENTS:
 - You MUST respond with ONLY valid JSON format
@@ -1062,133 +1694,184 @@ RESPONSE FORMAT (return exactly this structure):
 
 Available sub categories: {sub_categories}
 
-Remember: Respond with ONLY the JSON object, nothing else.""")
-                    
+Remember: Respond with ONLY the JSON object, nothing else."""
+                    )
+
                     # Get AI response with retry logic for sub-category
                     sub_category_response = None
-                    
+
                     for attempt in range(max_retries):
                         try:
-                            sub_category_response = self.ai_model.invoke([sub_category_system_message, human_message])
+                            sub_category_response = self.ai_model.invoke(
+                                [sub_category_system_message, human_message]
+                            )
                             break
                         except Exception as e:
                             if attempt < max_retries - 1:
-                                print(f"     ⚠️ Sub-category API call failed (attempt {attempt + 1}), retrying in 5 seconds...")
+                                print(
+                                    f"     ⚠️ Sub-category API call failed (attempt {attempt + 1}), retrying in 5 seconds..."
+                                )
                                 time.sleep(5)
                                 continue
                             else:
-                                print(f"     ❌ Sub-category API call failed after {max_retries} attempts: {e}")
+                                print(
+                                    f"     ❌ Sub-category API call failed after {max_retries} attempts: {e}"
+                                )
                                 raise e
-                    
+
                     if sub_category_response:
-                        parsed_sub_category = parse_ai_json_response(sub_category_response.content, "sub-category", expected_keys=["name", "documentId"])
+                        parsed_sub_category = parse_ai_json_response(
+                            sub_category_response.content,
+                            "sub-category",
+                            expected_keys=["name", "documentId"],
+                        )
                         if parsed_sub_category:
                             product["sub_category"] = parsed_sub_category
-                            print(f"     ✅ Added category: {product['category'].get('name')} | sub-category: {product['sub_category'].get('name')}")
-                            
+                            print(
+                                f"     ✅ Added category: {product['category'].get('name')} | sub-category: {product['sub_category'].get('name')}"
+                            )
+
                             # Update only this specific product in the JSON file
-                            self._update_single_product_in_json(json_path, index - 1, product)
+                            self._update_single_product_in_json(
+                                json_path, index - 1, product
+                            )
                         else:
-                            print(f"     ⚠️ Failed to parse sub-category for product {index}/{total_products}")
+                            print(
+                                f"     ⚠️ Failed to parse sub-category for product {index}/{total_products}"
+                            )
                             # Try fallback: ask AI to choose from a simplified list
-                            fallback_sub_category = self._fallback_sub_category_selection(product, sub_categories)
+                            fallback_sub_category = (
+                                self._fallback_sub_category_selection(
+                                    product, sub_categories
+                                )
+                            )
                             if fallback_sub_category:
                                 product["sub_category"] = fallback_sub_category
-                                print(f"     ✅ Fallback sub-category selected: {fallback_sub_category}")
+                                print(
+                                    f"     ✅ Fallback sub-category selected: {fallback_sub_category}"
+                                )
                             else:
-                                print(f"     ⚠️ No sub-category could be determined for product {index}/{total_products}")
+                                print(
+                                    f"     ⚠️ No sub-category could be determined for product {index}/{total_products}"
+                                )
                             # Still update with just the category
-                            self._update_single_product_in_json(json_path, index - 1, product)
-                        
+                            self._update_single_product_in_json(
+                                json_path, index - 1, product
+                            )
+
             except Exception as e:
-                print(f"     ❌ Error adding category to product {index}/{total_products}: {e}")
+                print(
+                    f"     ❌ Error adding category to product {index}/{total_products}: {e}"
+                )
 
     def _fallback_category_selection(self, product: dict, categories: list) -> dict:
         """Fallback method to select category when AI response parsing fails"""
         try:
             if not categories:
                 return None
-                
+
             # Create a simplified prompt with just the product name and a numbered list
-            product_name = product.get('name', 'Unknown Product')
-            category_list = "\n".join([f"{i+1}. {cat.get('name', 'Unknown')}" for i, cat in enumerate(categories)])
-            
-            fallback_message = SystemMessage(content=f"""You are a product categorization AI. The previous response failed to parse, so I need you to respond with ONLY a number.
+            product_name = product.get("name", "Unknown Product")
+            category_list = "\n".join(
+                [
+                    f"{i+1}. {cat.get('name', 'Unknown')}"
+                    for i, cat in enumerate(categories)
+                ]
+            )
+
+            fallback_message = SystemMessage(
+                content=f"""You are a product categorization AI. The previous response failed to parse, so I need you to respond with ONLY a number.
 
 Product: {product_name}
 
 Available categories (choose by number):
 {category_list}
 
-Respond with ONLY the number (1, 2, 3, etc.) corresponding to the most appropriate category. Do not include any other text.""")
-            
-            human_message = HumanMessage(content="Please select the most appropriate category number.")
-            
+Respond with ONLY the number (1, 2, 3, etc.) corresponding to the most appropriate category. Do not include any other text."""
+            )
+
+            human_message = HumanMessage(
+                content="Please select the most appropriate category number."
+            )
+
             response = self.ai_model.invoke([fallback_message, human_message])
             response_text = response.content.strip()
-            
+
             # Extract number from response
-            number_match = re.search(r'\b(\d+)\b', response_text)
+            number_match = re.search(r"\b(\d+)\b", response_text)
             if number_match:
                 selected_index = int(number_match.group(1)) - 1
                 if 0 <= selected_index < len(categories):
                     return categories[selected_index]
-                    
+
         except Exception as e:
             print(f"     ⚠️ Fallback category selection failed: {e}")
-        
+
         return None
 
-    def _fallback_sub_category_selection(self, product: dict, sub_categories: list) -> dict:
+    def _fallback_sub_category_selection(
+        self, product: dict, sub_categories: list
+    ) -> dict:
         """Fallback method to select sub-category when AI response parsing fails"""
         try:
             if not sub_categories:
                 return None
-                
+
             # Create a simplified prompt with just the product name and a numbered list
-            product_name = product.get('name', 'Unknown Product')
-            sub_category_list = "\n".join([f"{i+1}. {cat.get('name', 'Unknown')}" for i, cat in enumerate(sub_categories)])
-            
-            fallback_message = SystemMessage(content=f"""You are a product sub-categorization AI. The previous response failed to parse, so I need you to respond with ONLY a number.
+            product_name = product.get("name", "Unknown Product")
+            sub_category_list = "\n".join(
+                [
+                    f"{i+1}. {cat.get('name', 'Unknown')}"
+                    for i, cat in enumerate(sub_categories)
+                ]
+            )
+
+            fallback_message = SystemMessage(
+                content=f"""You are a product sub-categorization AI. The previous response failed to parse, so I need you to respond with ONLY a number.
 
 Product: {product_name}
 
 Available sub-categories (choose by number):
 {sub_category_list}
 
-Respond with ONLY the number (1, 2, 3, etc.) corresponding to the most appropriate sub-category. Do not include any other text.""")
-            
-            human_message = HumanMessage(content="Please select the most appropriate sub-category number.")
-            
+Respond with ONLY the number (1, 2, 3, etc.) corresponding to the most appropriate sub-category. Do not include any other text."""
+            )
+
+            human_message = HumanMessage(
+                content="Please select the most appropriate sub-category number."
+            )
+
             response = self.ai_model.invoke([fallback_message, human_message])
             response_text = response.content.strip()
-            
+
             # Extract number from response
-            number_match = re.search(r'\b(\d+)\b', response_text)
+            number_match = re.search(r"\b(\d+)\b", response_text)
             if number_match:
                 selected_index = int(number_match.group(1)) - 1
                 if 0 <= selected_index < len(sub_categories):
                     return sub_categories[selected_index]
-                    
+
         except Exception as e:
             print(f"     ⚠️ Fallback sub-category selection failed: {e}")
-        
+
         return None
 
-    def _update_single_product_in_json(self, json_path: str, product_index: int, updated_product: dict):
+    def _update_single_product_in_json(
+        self, json_path: str, product_index: int, updated_product: dict
+    ):
         """Update a single product in the JSON file without rewriting the entire file"""
         try:
             # Read the current JSON file
             with open(json_path, "r", encoding="utf-8") as f:
                 products = json.load(f)
-            
+
             # Update only the specific product
             products[product_index] = updated_product
-            
+
             # Write back the updated products array
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(products, f, indent=2, ensure_ascii=False)
-                
+
         except Exception as e:
             print(f"     ⚠️ Failed to update product {product_index + 1} in JSON: {e}")
 
@@ -1205,24 +1888,20 @@ Respond with ONLY the number (1, 2, 3, etc.) corresponding to the most appropria
             """
 
             # Variables to send with the query
-            variables = {
-                "pagination": {
-                    "limit": -1  
-                }
-            }
+            variables = {"pagination": {"limit": -1}}
             result = graphql_requester(query, variables)
             categories = result.get("productCategories")
         except Exception as e:
             print(str(e))
         return categories
-    
+
     def get_sub_categories(self, category: dict):
         # Check cache first
-        category_id = category.get('documentId')
+        category_id = category.get("documentId")
         if category_id in self.sub_categories_cache:
             print(f"Using cached sub-categories for: {category.get('name')}")
             return self.sub_categories_cache[category_id]
-        
+
         sub_categories = []
 
         try:
@@ -1240,26 +1919,26 @@ Respond with ONLY the number (1, 2, 3, etc.) corresponding to the most appropria
             variables = {
                 "filters": {
                     "product_category": {
-                        "documentId": {
-                            "eq": category.get('documentId')
-                        }
+                        "documentId": {"eq": category.get("documentId")}
                     }
                 }
             }
             result = graphql_requester(query, variables)
             sub_categories = result.get("productSubCategories")
-            
+
             # Cache the result for future use
             self.sub_categories_cache[category_id] = sub_categories
             print(f"Cached sub-categories for: {category.get('name')}")
-            
+
         except Exception as e:
             print(str(e))
         return sub_categories
 
 
 # Usage Example
-def main(pdf_file, use_ai: bool = True, add_category: bool = False, start_from: int = 0):
+def main(
+    pdf_file, use_ai: bool = True, add_category: bool = False, start_from: int = 0
+):
     # Timing: record start time
     start_ts = time.time()
     start_dt = datetime.now()
@@ -1297,7 +1976,9 @@ def main(pdf_file, use_ai: bool = True, add_category: bool = False, start_from: 
 
         # Step 2: Convert PDF to structured XML
         print("Converting PDF to XML...")
-        xml_file = extractor.pdf_to_xml(pdf_file, paths["xml_path"], paths["images_dir"])
+        xml_file = extractor.pdf_to_xml(
+            pdf_file, paths["xml_path"], paths["images_dir"]
+        )
         print(f"XML saved to: {xml_file}")
 
         # Filter out small images before AI processing
@@ -1317,6 +1998,26 @@ def main(pdf_file, use_ai: bool = True, add_category: bool = False, start_from: 
         except Exception as e:
             print(f"⚠️ Failed to filter small images: {e}")
 
+        # Generate product visualization with colored bounding boxes
+        print("\n🎨 Generating product visualization...")
+        try:
+            from visualize_products import draw_bounding_boxes
+
+            color_mapping = draw_bounding_boxes(
+                xml_path=xml_file,
+                output_folder=paths["images_dir"],
+                line_width=3,
+                update_xml=True,
+            )
+            print(
+                f"✅ Visualization complete! Generated {len(color_mapping) if color_mapping else 0} colored boxes"
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to generate visualization: {e}")
+            import traceback
+
+            traceback.print_exc()
+
         # Step 3: Extract products with AI enhancement (optional)
         if use_ai and extractor.ai_model:
             print("🤖 Starting AI-enhanced extraction...")
@@ -1330,6 +2031,44 @@ def main(pdf_file, use_ai: bool = True, add_category: bool = False, start_from: 
                 f"   📈 Progress tracking: {paths['xml_path'].replace('_structure.xml', '_progress.json')}"
             )
         else:
+            # AI disabled or AI model unavailable — produce JSON from XML for downstream tooling
+            try:
+                json_out = extractor.xml_to_json(xml_file)
+                print(f"✅ Converted XML to JSON: {json_out}")
+            except Exception as e:
+                print(f"⚠️ Failed to convert XML to JSON: {e}")
+
+            # If grouping helper is available, compute groups per page using proximity threshold
+            if _group_blocks_module is not None and "json_out" in locals():
+                try:
+                    import json as _json
+
+                    with open(json_out, "r", encoding="utf-8") as _f:
+                        _j = _json.load(_f)
+
+                    try:
+                        thresh = float(os.getenv("PDF_GROUP_THRESHOLD", "5"))
+                    except Exception:
+                        thresh = 50.0
+
+                    for _p in _j.get("pages", []):
+                        try:
+                            grp = _group_blocks_module.group_page(_p, threshold=thresh)
+                        except Exception:
+                            grp = []
+                        _p["groups"] = grp
+
+                    grouped_out = (
+                        os.path.splitext(json_out)[0] + ".fullblocks.grouped.json"
+                    )
+                    with open(grouped_out, "w", encoding="utf-8") as _f:
+                        _json.dump(_j, _f, indent=2, ensure_ascii=False)
+                    print(f"✅ Grouped JSON saved: {grouped_out}")
+                except Exception as e:
+                    print(f"⚠️ Failed to auto-group JSON: {e}")
+            else:
+                print("group_blocks not available — skipping grouping")
+
             print("⚠️  AI not available, only XML structure created.")
 
         print(f"\n✅ Processing complete!")
@@ -1378,19 +2117,25 @@ if __name__ == "__main__":
     start_from_flag = 0
     # Parse simple CLI: first positional arg is PDF path; use --no-ai to disable AI
 
-    #add one condition for flag to directly start with adding category
+    # add one condition for flag to directly start with adding category
     for a in sys.argv[1:]:
         if a in ("--no-ai", "--no_ai", "-n"):
             use_ai_flag = False
         elif a in ("--add-category", "--add_category", "-c"):
             add_category_flag = True
-        elif a.startswith("--start-from=") or a.startswith("--start_from=") or a.startswith("-s="):
+        elif (
+            a.startswith("--start-from=")
+            or a.startswith("--start_from=")
+            or a.startswith("-s=")
+        ):
             start_from_flag = int(a.split("=")[1])
         elif not a.startswith("-"):
             pdf_path = a
 
     print(f"Debug: start_from_flag = {start_from_flag}")
-    main(pdf_path, use_ai=use_ai_flag, add_category=add_category_flag, start_from=start_from_flag)
-
-
-
+    main(
+        pdf_path,
+        use_ai=use_ai_flag,
+        add_category=add_category_flag,
+        start_from=start_from_flag,
+    )

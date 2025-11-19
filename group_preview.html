@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Group Previewer</title>
+    <style>
+      body {
+        font-family: Inter, Arial, Helvetica, sans-serif;
+        background: #071022;
+        color: #e6eef8;
+        margin: 0;
+        padding: 18px;
+      }
+      .top {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      .btn {
+        background: #0ea5a4;
+        color: #042029;
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 0;
+        cursor: pointer;
+      }
+      .viewer {
+        display: flex;
+        gap: 16px;
+      }
+      .sidebar {
+        width: 340px;
+        max-height: 84vh;
+        overflow: auto;
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 8px;
+      }
+      .main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .page-wrap {
+        position: relative;
+        background: #061021;
+        padding: 8px;
+        border-radius: 8px;
+        overflow: auto;
+      }
+      .page-img {
+        display: block;
+        max-width: 100%;
+        height: auto;
+      }
+      .overlay {
+        position: absolute;
+        left: 8px;
+        top: 8px;
+      }
+      .group-box {
+        position: absolute;
+        box-sizing: border-box;
+        border: 3px solid rgba(250, 180, 80, 0.95);
+        background: rgba(250, 180, 80, 0.06);
+        pointer-events: none;
+      }
+      .group-selected {
+        outline: 4px solid rgba(255, 255, 255, 0.12);
+      }
+      .group-item {
+        padding: 8px;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        background: rgba(255, 255, 255, 0.02);
+        cursor: pointer;
+      }
+      .group-item:hover {
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .group-meta {
+        font-size: 13px;
+        color: #9fb0cc;
+      }
+      .preview-panel {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+      }
+      .thumbs {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        width: 380px;
+      }
+      .thumb {
+        width: 100%;
+        border-radius: 6px;
+        background: #0b1220;
+        padding: 6px;
+      }
+      .thumb img {
+        width: 100%;
+        height: auto;
+        border-radius: 4px;
+      }
+      .texts {
+        flex: 1;
+        max-height: 360px;
+        overflow: auto;
+        padding: 8px;
+        background: rgba(255, 255, 255, 0.02);
+        border-radius: 6px;
+      }
+      .text-block {
+        padding: 6px;
+        margin-bottom: 6px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.01);
+        font-size: 13px;
+      }
+      .small {
+        font-size: 13px;
+        color: #9fb0cc;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="top">
+      <label class="btn"
+        >📁 Load Grouped JSON<input
+          id="jsonFile"
+          type="file"
+          accept="application/json"
+          style="display: none"
+      /></label>
+      <label class="btn" style="background: #1e293b"
+        >🖼️ Images folder<input
+          id="imgFolder"
+          type="file"
+          webkitdirectory
+          directory
+          multiple
+          style="display: none"
+      /></label>
+      <div style="margin-left: auto" class="small">
+        Click a group to preview its images & texts
+      </div>
+    </div>
+
+    <div class="viewer">
+      <div class="sidebar">
+        <div id="meta" class="small">No JSON loaded</div>
+        <hr />
+        <div id="groupsList">Load a grouped JSON to see groups</div>
+      </div>
+
+      <div class="main">
+        <div id="pageArea" class="page-wrap">
+          <div id="pageContainer">No page loaded</div>
+        </div>
+
+        <div id="detailArea" class="preview-panel" style="display: none">
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <div style="display: flex; gap: 8px; align-items: center">
+              <button id="toggleFull" class="btn" style="background: #334155">
+                🔍 Show full page
+              </button>
+              <button
+                id="naturalSizeBtn"
+                class="btn"
+                style="background: #475569"
+              >
+                1:1
+              </button>
+            </div>
+            <div
+              id="fullView"
+              style="
+                display: none;
+                background: #061021;
+                padding: 8px;
+                border-radius: 6px;
+                overflow: auto;
+                max-width: 920px;
+                max-height: 520px;
+              "
+            >
+              <div
+                id="fullContainer"
+                style="position: relative; display: block"
+              >
+                <img
+                  id="fullImg"
+                  src=""
+                  style="
+                    display: block;
+                    max-width: 100%;
+                    height: auto;
+                    border-radius: 4px;
+                  "
+                />
+                <div
+                  id="fullOverlay"
+                  style="
+                    position: absolute;
+                    left: 0;
+                    top: 0;
+                    pointer-events: none;
+                  "
+                ></div>
+              </div>
+            </div>
+          </div>
+          <div class="thumbs" id="thumbs"></div>
+          <div class="texts" id="texts"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const jsonFile = document.getElementById("jsonFile");
+      const imgFolder = document.getElementById("imgFolder");
+      const groupsList = document.getElementById("groupsList");
+      const meta = document.getElementById("meta");
+      const pageContainer = document.getElementById("pageContainer");
+      const pageArea = document.getElementById("pageArea");
+      const thumbs = document.getElementById("thumbs");
+      const texts = document.getElementById("texts");
+      const detailArea = document.getElementById("detailArea");
+
+      let data = null;
+      let filesMap = {};
+      let currentSelected = null; // {pageIndex, groupIndex}
+
+      imgFolder.addEventListener("change", (e) => {
+        const files = Array.from(e.target.files || []);
+        filesMap = {};
+        files.forEach((f) => (filesMap[f.name] = f));
+        console.log("images folder loaded", files.length);
+      });
+
+      function resolvePath(path) {
+        if (!path) return "";
+        if (path.startsWith("data:") || path.startsWith("http")) return path;
+        const name = path.split("/").pop();
+        if (filesMap[name]) return URL.createObjectURL(filesMap[name]);
+        return path;
+      }
+
+      jsonFile.addEventListener("change", async (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        const txt = await f.text();
+        try {
+          data = JSON.parse(txt);
+        } catch (err) {
+          alert("Invalid JSON: " + err);
+          return;
+        }
+        renderGroups();
+      });
+
+      function renderGroups() {
+        groupsList.innerHTML = "";
+        pageContainer.innerHTML = "";
+        thumbs.innerHTML = "";
+        texts.innerHTML = "";
+        detailArea.style.display = "none";
+        currentSelected = null;
+        if (!data) return;
+        meta.textContent = `Source: ${data.source || "unknown"} — pages: ${
+          data.total_pages || data.pages.length
+        }`;
+        data.pages.forEach((p, pi) => {
+          (p.groups || []).forEach((g, gi) => {
+            const el = document.createElement("div");
+            el.className = "group-item";
+            el.innerHTML = `<strong>Group ${
+              gi + 1
+            }</strong><div class="group-meta">page ${p.page_number} — ${
+              g.images.length
+            } images, ${g.texts.length} texts</div>`;
+            el.addEventListener("click", () => selectGroup(pi, gi));
+            groupsList.appendChild(el);
+          });
+        });
+        // render first page image area (show page image to overlay groups)
+        renderPageView(0);
+      }
+
+      function renderPageView(pageIndex) {
+        pageContainer.innerHTML = "";
+        const p = data.pages[pageIndex];
+        const img = document.createElement("img");
+        img.className = "page-img";
+        // prefer an image file from page.images[0].file
+        let imgPath = "";
+        if (p.images && p.images.length > 0) imgPath = p.images[0].file;
+        if (!imgPath && p.full_image) imgPath = p.full_image;
+        img.src = resolvePath(imgPath) || "";
+        img.alt = `page-${p.page_number}`;
+        pageContainer.appendChild(img);
+
+        const ov = document.createElement("div");
+        ov.className = "overlay";
+        ov.style.left = "8px";
+        ov.style.top = "8px";
+        ov.style.pointerEvents = "none";
+        pageContainer.appendChild(ov);
+
+        img.addEventListener("load", () => {
+          // compute scale relative to PDF units
+          const pageRect = {
+            width: p.width || img.naturalWidth,
+            height: p.height || img.naturalHeight,
+            imgEl: img,
+          };
+          ov.innerHTML = "";
+          (p.groups || []).forEach((g, gi) => {
+            const box = makeBoxEl(g.bbox, pageRect);
+            box.classList.add("group-box");
+            box.dataset.pi = pageIndex;
+            box.dataset.gi = gi;
+            ov.appendChild(box);
+          });
+        });
+      }
+
+      function makeBoxEl(bbox, pageRect) {
+        const [x0, y0, x1, y1] = bbox;
+        const pw = pageRect.width,
+          ph = pageRect.height;
+        const img = pageRect.imgEl;
+        // compute separate x/y scales based on displayed image size to maintain aspect
+        const displayedW =
+          img && img.clientWidth ? img.clientWidth : img.naturalWidth;
+        const displayedH =
+          img && img.clientHeight ? img.clientHeight : img.naturalHeight;
+        const sx = displayedW / pw;
+        const sy = displayedH / ph;
+        const left = x0 * sx;
+        const top = y0 * sy;
+        const w = (x1 - x0) * sx;
+        const h = (y1 - y0) * sy;
+        const d = document.createElement("div");
+        d.style.left = left + "px";
+        d.style.top = top + "px";
+        d.style.width = w + "px";
+        d.style.height = h + "px";
+        d.style.position = "absolute";
+        return d;
+      }
+
+      function selectGroup(pageIndex, groupIndex) {
+        currentSelected = { pageIndex, groupIndex };
+        // render page view for that page
+        renderPageView(pageIndex);
+        // after render, highlight the group and show details
+        setTimeout(() => {
+          const p = data.pages[pageIndex];
+          const ov = pageContainer.querySelector(".overlay");
+          if (!ov) return;
+          // remove previous highlights
+          ov.querySelectorAll(".group-box").forEach(
+            (n) => (n.style.boxShadow = "none")
+          );
+          const boxes = ov.querySelectorAll(".group-box");
+          const target = Array.from(boxes).find(
+            (b) => parseInt(b.dataset.gi, 10) === groupIndex
+          );
+          if (target) {
+            target.style.boxShadow = "0 0 0 4px rgba(255,255,255,0.08)";
+            target.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+
+          // populate thumbs and texts
+          const g = p.groups[groupIndex];
+          thumbs.innerHTML = "";
+          texts.innerHTML = "";
+          detailArea.style.display = "flex";
+          // prepare full view image (but don't auto-show unless toggle enabled)
+          const fullImg = document.getElementById("fullImg");
+          const fullOverlay = document.getElementById("fullOverlay");
+          const fullView = document.getElementById("fullView");
+          const toggle = document.getElementById("toggleFull");
+          let fullPath =
+            p.full_image || (p.images && p.images[0] && p.images[0].file) || "";
+          fullImg.src = resolvePath(fullPath) || "";
+          fullOverlay.innerHTML = "";
+          fullImg.onload = () => {
+            // size mapping from page units to displayed image pixels
+            const pw = p.width || fullImg.naturalWidth;
+            const ph = p.height || fullImg.naturalHeight;
+            const displayedW =
+              fullImg && fullImg.clientWidth
+                ? fullImg.clientWidth
+                : fullImg.naturalWidth;
+            const displayedH =
+              fullImg && fullImg.clientHeight
+                ? fullImg.clientHeight
+                : fullImg.naturalHeight;
+            // position and size overlay to match the displayed image inside the relative container
+            fullOverlay.style.position = "absolute";
+            fullOverlay.style.left = "0px";
+            fullOverlay.style.top = "0px";
+            fullOverlay.style.width = displayedW + "px";
+            fullOverlay.style.height = displayedH + "px";
+            // account for potential devicePixelRatio if needed when interpreting bitmap pixels
+            const dpr = window.devicePixelRatio || 1;
+            const sx = displayedW / pw;
+            const sy = displayedH / ph;
+            // draw boxes for all groups, but highlight the selected one
+            fullOverlay.innerHTML = "";
+            (p.groups || []).forEach((grp, gi) => {
+              const [x0, y0, x1, y1] = grp.bbox;
+              const left = x0 * sx;
+              const top = y0 * sy;
+              const w = (x1 - x0) * sx;
+              const h = (y1 - y0) * sy;
+              const d = document.createElement("div");
+              d.style.position = "absolute";
+              d.style.left = left + "px";
+              d.style.top = top + "px";
+              d.style.width = w + "px";
+              d.style.height = h + "px";
+              d.style.boxSizing = "border-box";
+              d.style.border = "3px solid rgba(250,180,80,0.9)";
+              d.style.background = "rgba(250,180,80,0.06)";
+              d.style.pointerEvents = "none";
+              if (gi === groupIndex) {
+                d.style.outline = "4px solid rgba(255,255,255,0.12)";
+              }
+              fullOverlay.appendChild(d);
+            });
+            // center selected group in the scrollable fullView
+            const selBox = fullOverlay.children[groupIndex];
+            if (selBox) {
+              const container = document.getElementById("fullView");
+              const cx = selBox.offsetLeft + selBox.offsetWidth / 2;
+              const cy = selBox.offsetTop + selBox.offsetHeight / 2;
+              container.scrollLeft = Math.max(
+                0,
+                cx - container.clientWidth / 2
+              );
+              container.scrollTop = Math.max(
+                0,
+                cy - container.clientHeight / 2
+              );
+            }
+          };
+          (g.images || []).forEach((im) => {
+            const div = document.createElement("div");
+            div.className = "thumb";
+            const img = document.createElement("img");
+            img.src = resolvePath(im.file) || "";
+            div.appendChild(img);
+            // click thumbnail to open the image in a new tab
+            div.addEventListener("click", () => {
+              const fp = resolvePath(im.file) || "";
+              if (fp) window.open(fp, "_blank");
+            });
+            thumbs.appendChild(div);
+          });
+          (g.texts || []).forEach((t) => {
+            const d = document.createElement("div");
+            d.className = "text-block";
+            d.innerHTML = `<div style="font-weight:600">${
+              t.id || ""
+            }</div><div style="white-space:pre-wrap">${(
+              t.content ||
+              t.text ||
+              t
+            ).toString()}</div>`;
+            texts.appendChild(d);
+          });
+        }, 120);
+      }
+      // Toggle full page view
+      (function () {
+        const btn = document.getElementById("toggleFull");
+        if (!btn) return;
+        btn.addEventListener("click", () => {
+          const fv = document.getElementById("fullView");
+          if (!fv) return;
+          if (fv.style.display === "none" || fv.style.display === "") {
+            fv.style.display = "block";
+            btn.textContent = "🔍 Hide full page";
+          } else {
+            fv.style.display = "none";
+            btn.textContent = "🔍 Show full page";
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
