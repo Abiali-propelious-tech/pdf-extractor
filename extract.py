@@ -15,8 +15,8 @@ from typing import List, Dict, Any
 from dotenv import load_dotenv
 import glob
 import re
-from requester import graphql_requester
-from json_parser import parse_ai_json_response
+from utils.requester import graphql_requester
+from utils.json_parser import parse_ai_json_response
 
 load_dotenv()
 # Optional OCR imports
@@ -41,7 +41,7 @@ except ImportError:
 
 # Optional grouping helper used to post-process JSON into grouped blocks
 try:
-    import group_blocks as _group_blocks_module
+    import utils.group_blocks as _group_blocks_module
 except Exception:
     _group_blocks_module = None
 
@@ -167,6 +167,12 @@ class PDFStructureExtractor:
             except Exception:
                 blocks = []
 
+            # Try to extract richer text span data (font, size, color) using the dict output
+            try:
+                dict_output = page.get_text("dict")
+            except Exception:
+                dict_output = None
+
             for i, b in enumerate(blocks):
                 try:
                     x0, y0, x1, y1, text, *_ = b
@@ -175,11 +181,154 @@ class PDFStructureExtractor:
                 tb = ET.Element("text_block")
                 tb.set("id", f"text_{page_num}_{i}")
                 tb.set("bbox", f"{x0:.1f},{y0:.1f},{x1:.1f},{y1:.1f}")
-                # rudimentary font/size detection not available here; leave blank
-                tb.set("font", "")
-                tb.set("size", "")
-                # classify type heuristically
-                ttype = self._classify_text_type(text, 0, (x0, y0, x1, y1))
+                # Add width/height of text block
+                try:
+                    width = float(x1 - x0)
+                    height = float(y1 - y0)
+                    tb.set("width", f"{width:.1f}")
+                    tb.set("height", f"{height:.1f}")
+                except Exception:
+                    tb.set("width", "")
+                    tb.set("height", "")
+                # Try enrich block information with font/size/color using spans if available
+                font_name = ""
+                font_size = ""
+                font_color = ""
+                try:
+                    if dict_output and isinstance(dict_output, dict):
+                        # Find a matching block by bbox (allow some tolerance)
+                        tolerance = 1.0
+                        dict_blocks = dict_output.get("blocks", [])
+                        matched_block = None
+                        for db in dict_blocks:
+                            # only consider text blocks
+                            if db.get("type") != 0:
+                                continue
+                            db_bbox = db.get("bbox") or []
+                            if len(db_bbox) >= 4:
+                                dx0, dy0, dx1, dy1 = db_bbox
+                                if (
+                                    abs(dx0 - x0) < tolerance
+                                    and abs(dy0 - y0) < tolerance
+                                    and abs(dx1 - x1) < tolerance
+                                    and abs(dy1 - y1) < tolerance
+                                ):
+                                    matched_block = db
+                                    break
+
+                        # If not found by exact bbox, try a looser match: overlap
+                        if not matched_block:
+                            for db in dict_blocks:
+                                if db.get("type") != 0:
+                                    continue
+                                db_bbox = db.get("bbox") or []
+                                if len(db_bbox) >= 4:
+                                    dx0, dy0, dx1, dy1 = db_bbox
+                                    # Check center of block lies within
+                                    cx = (x0 + x1) / 2
+                                    cy = (y0 + y1) / 2
+                                    if (
+                                        dx0 - tolerance <= cx <= dx1 + tolerance
+                                        and dy0 - tolerance <= cy <= dy1 + tolerance
+                                    ):
+                                        matched_block = db
+                                        break
+
+                        if matched_block:
+                            # gather fonts, sizes, colors from spans
+                            spans = []
+                            for line in matched_block.get("lines", []):
+                                for span in line.get("spans", []):
+                                    spans.append(span)
+
+                            if spans:
+                                # Get most frequent font and size, and a common color
+                                fonts = [s.get("font") or "" for s in spans]
+                                sizes = [s.get("size") for s in spans if s.get("size")]
+                                colors = [
+                                    s.get("color") for s in spans if s.get("color")
+                                ]
+
+                                # pick most frequent non-empty font
+                                from collections import Counter
+
+                                try:
+                                    font_name = Counter(
+                                        [f for f in fonts if f]
+                                    ).most_common(1)[0][0]
+                                except Exception:
+                                    font_name = ""
+
+                                try:
+                                    # pick typical size (rounded)
+                                    size_counts = Counter(
+                                        [round(float(s), 1) for s in sizes]
+                                    )
+                                    font_size = (
+                                        ""
+                                        if not size_counts
+                                        else f"{size_counts.most_common(1)[0][0]:.1f}"
+                                    )
+                                except Exception:
+                                    font_size = ""
+
+                                try:
+                                    # Normalize color values (PyMuPDF can give integer or tuples)
+                                    def _col_to_hex(c):
+                                        try:
+                                            if c is None:
+                                                return ""
+                                            # integer colors (24-bit) -- convert to RGB
+                                            if isinstance(c, int):
+                                                r = (c >> 16) & 255
+                                                g = (c >> 8) & 255
+                                                b = c & 255
+                                                return f"#{r:02x}{g:02x}{b:02x}"
+                                            # tuple of floats 0..1 or ints 0..255
+                                            if (
+                                                isinstance(c, (tuple, list))
+                                                and len(c) >= 3
+                                            ):
+                                                r, g, b = c[0], c[1], c[2]
+                                                if isinstance(r, float) and r <= 1.0:
+                                                    r = int(round(r * 255))
+                                                    g = int(round(g * 255))
+                                                    b = int(round(b * 255))
+                                                else:
+                                                    r, g, b = int(r), int(g), int(b)
+                                                return f"#{r:02x}{g:02x}{b:02x}"
+                                            # string colors (like "#rrggbb")
+                                            if isinstance(c, str) and c.startswith("#"):
+                                                return c
+                                        except Exception:
+                                            return ""
+                                        return ""
+
+                                    # pick most common color hex
+                                    hex_colors = [_col_to_hex(c) for c in colors]
+                                    hex_counts = Counter([h for h in hex_colors if h])
+                                    font_color = (
+                                        hex_counts.most_common(1)[0][0]
+                                        if hex_counts
+                                        else ""
+                                    )
+                                except Exception:
+                                    font_color = ""
+
+                except Exception:
+                    font_name = ""
+                    font_size = ""
+                    font_color = ""
+
+                tb.set("font", font_name)
+                tb.set("size", font_size)
+                tb.set("color", font_color)
+                # classify type heuristically using font size if available
+                try:
+                    parsed_size = float(tb.get("size")) if tb.get("size") else 0.0
+                except Exception:
+                    parsed_size = 0.0
+                ttype = self._classify_text_type(text, parsed_size, (x0, y0, x1, y1))
                 tb.set("type", ttype)
                 tb.text = text.strip()
                 page_elem.append(tb)
@@ -434,7 +583,14 @@ class PDFStructureExtractor:
                                             "bbox",
                                             f"{rect.x0:.1f},{rect.y0:.1f},{rect.x1:.1f},{rect.y1:.1f}",
                                         )
+                                        try:
+                                            tb.set("width", f"{(rect.x1-rect.x0):.1f}")
+                                            tb.set("height", f"{(rect.y1-rect.y0):.1f}")
+                                        except Exception:
+                                            tb.set("width", "")
+                                            tb.set("height", "")
                                         tb.set("font", "")
+                                        tb.set("color", "")
                                         tb.set("size", "")
                                         tb.set("type", "ocr_text")
                                         tb.text = ocr_text.strip()
@@ -573,7 +729,18 @@ class PDFStructureExtractor:
                                         "bbox",
                                         bbox_str,
                                     )
+                                    try:
+                                        # compute width/height from bbox string
+                                        bx0, by0, bx1, by1 = [
+                                            float(x) for x in bbox_str.split(",")
+                                        ]
+                                        tb.set("width", f"{(bx1-bx0):.1f}")
+                                        tb.set("height", f"{(by1-by0):.1f}")
+                                    except Exception:
+                                        tb.set("width", "")
+                                        tb.set("height", "")
                                     tb.set("font", "")
+                                    tb.set("color", "")
                                     tb.set("size", "")
                                     tb.set("type", "ocr_text")
                                     tb.text = fallback_text.strip()
@@ -719,12 +886,26 @@ class PDFStructureExtractor:
                 "images": [],
                 "texts": [],
             }
+            # Blocking heuristics thresholds
+            try:
+                image_min_frac = float(os.getenv("PDF_IMAGE_MIN_AREA_FRAC", "0"))
+                image_max_frac = float(os.getenv("PDF_IMAGE_MAX_AREA_FRAC", "0.45"))
+                # New: thresholds for width/height proportional blocking
+                image_min_dim_frac = float(os.getenv("PDF_IMAGE_MIN_DIM_FRAC", "0"))
+                image_max_dim_frac = float(os.getenv("PDF_IMAGE_MAX_DIM_FRAC", "0.45"))
+            except Exception:
+                image_min_frac = 0
+                image_max_frac = 0.45
+                image_min_dim_frac = 0
+                image_max_dim_frac = 0.45
             # attach a full-page snapshot path if it exists (images/page_{n}_full.png)
             try:
-                xml_dir = os.path.dirname(xml_path) or '.'
-                candidate = os.path.join(xml_dir, 'images', f'page_{page_number}_full.png')
+                xml_dir = os.path.dirname(xml_path) or "."
+                candidate = os.path.join(
+                    xml_dir, "images", f"page_{page_number}_full.png"
+                )
                 if os.path.exists(candidate):
-                    page_obj['full_image'] = candidate
+                    page_obj["full_image"] = candidate
             except Exception:
                 pass
 
@@ -747,6 +928,31 @@ class PDFStructureExtractor:
                         "xref": img.get("xref"),
                     }
                 )
+                # compute area fraction and optionally block too-large or too-small images
+                try:
+                    w = (
+                        float(img.get("width"))
+                        if img.get("width")
+                        else (bbox[2] - bbox[0])
+                    )
+                    h = (
+                        float(img.get("height"))
+                        if img.get("height")
+                        else (bbox[3] - bbox[1])
+                    )
+                    page_width = page_obj.get("width", 0) or 1
+                    page_height = page_obj.get("height", 0) or 1
+                    w_frac = w / page_width
+                    h_frac = h / page_height
+                    # NOTE: image filtering removed — keep all image blocks so grouping
+                    # can consider them as anchors. Previously we flagged images as
+                    # blocked according to dimension/area thresholds which caused
+                    # downstream grouping to skip them and leave lone text groups.
+                    # To satisfy the user's request, stop marking images blocked
+                    # here and keep a clean, consistent structure.
+                    page_obj["images"][-1]["blocked"] = False
+                except Exception:
+                    page_obj["images"][-1]["blocked"] = False
 
             for tb in p.findall("text_block"):
                 bbox_attr = tb.get("bbox") or ""
@@ -762,9 +968,381 @@ class PDFStructureExtractor:
                         "type": tb.get("type"),
                         "bbox": bbox,
                         "font": tb.get("font"),
-                        "size": tb.get("size"),
+                        "size": (
+                            float(tb.get("size"))
+                            if tb.get("size") and tb.get("size").strip()
+                            else None
+                        ),
+                        "color": tb.get("color"),
                     }
                 )
+                # Block blocks that are numeric-only. We define numeric-only as
+                # a string composed entirely of one or more numeric tokens
+                # (integers or decimals) possibly separated by whitespace and
+                # common separators such as comma, dot, plus, minus, colon or slash.
+                # Examples that will be blocked: '14', '137\n138', '1,234', '3.14', '+100 -200'
+                try:
+                    content = (tb.text or "").strip()
+                    if content:
+                        # Match sequences of numeric tokens separated by whitespace or
+                        # simple punctuation. This rejects tokens containing letters
+                        # (eg '400x100'). \n is included in \s so multiline numeric
+                        # blocks like '137\n138' will be considered numeric-only.
+                        if re.match(
+                            r"^[\s\+\-]*\d+(?:[\.,]\d+)?(?:[\s,;:/\-\+]+\d+(?:[\.,]\d+)?)*\s*$",
+                            content,
+                        ):
+                            page_obj["texts"][-1]["blocked"] = True
+                            page_obj["texts"][-1]["blocked_reason"] = "only_number"
+                        else:
+                            # Block single-character or short gibberish/product-code-like
+                            # tokens to avoid confusing downstream AI/context.
+                            # Configurable via PDF_BLOCK_SHORT_TOKENS (default true) and
+                            # PDF_BLOCK_SHORT_TOKENS_MAX_LEN controls token max length considered (default 3).
+                            try:
+                                if os.getenv(
+                                    "PDF_BLOCK_SHORT_TOKENS", "1"
+                                ).strip() not in (
+                                    "0",
+                                    "false",
+                                    "no",
+                                ):
+                                    max_len = int(
+                                        os.getenv("PDF_BLOCK_SHORT_TOKENS_MAX_LEN", "3")
+                                    )
+                                else:
+                                    max_len = 0
+                            except Exception:
+                                max_len = 3
+
+                            if max_len and content:
+                                # Split into tokens (whitespace). If single token or all tokens are 1-char,
+                                # apply heuristics.
+                                toks = re.split(r"\s+", content)
+                                # mark single-character or single-token codes as blocked
+                                if len(toks) == 1:
+                                    tok = toks[0]
+                                    tlen = len(tok)
+                                    if tlen == 1:
+                                        page_obj["texts"][-1]["blocked"] = True
+                                        page_obj["texts"][-1][
+                                            "blocked_reason"
+                                        ] = "single_char"
+                                    else:
+                                        # heuristics for short noisy tokens (product codes / gibberish)
+                                        # If token is short (<= max_len) and contains digits or
+                                        # non-alpha characters, or is mostly non-alpha, treat as noise.
+                                        alpha_count = sum(1 for c in tok if c.isalpha())
+                                        digit_count = sum(1 for c in tok if c.isdigit())
+                                        non_alnum = sum(
+                                            1 for c in tok if not c.isalnum()
+                                        )
+                                        alpha_ratio = alpha_count / float(max(1, tlen))
+                                        if tlen <= max_len and (
+                                            digit_count > 0
+                                            or non_alnum > 0
+                                            or alpha_ratio < 0.5
+                                        ):
+                                            page_obj["texts"][-1]["blocked"] = True
+                                            page_obj["texts"][-1][
+                                                "blocked_reason"
+                                            ] = "short_code_or_gibberish"
+                                else:
+                                    # multi-token content: if every token is a single-char token,
+                                    # block it (e.g., 'A B C'). Also if there is one token and others are punctuation
+                                    all_one_char = all(
+                                        len(t) == 1 for t in toks if t.strip()
+                                    )
+                                    if all_one_char and len(toks) > 0:
+                                        page_obj["texts"][-1]["blocked"] = True
+                                        page_obj["texts"][-1][
+                                            "blocked_reason"
+                                        ] = "single_char_run"
+                except Exception:
+                    # best effort; don't break extraction on regex failures
+                    pass
+                # store size value on page object (already set in tb element)
+                # we'll apply per-page density filtering after collecting all
+                # text blocks for this page so blocking is based on page-local
+                # font-density instead of a static global min/max.
+                try:
+                    parsed_size = (
+                        float(tb.get("size"))
+                        if tb.get("size") and tb.get("size").strip()
+                        else None
+                    )
+                except Exception:
+                    parsed_size = None
+                # keep the float size value in the JSON so downstream steps
+                # can use it if needed
+                try:
+                    page_obj["texts"][-1]["size"] = parsed_size
+                except Exception:
+                    pass
+
+            # --- PER-PAGE font-density based blocking ---
+            # If any text blocks lack a numeric size, mark them as blocked to avoid
+            # downstream grouping ambiguity. However, if a large fraction of the
+            # page's text blocks have missing sizes (extraction failure for that
+            # page), we should NOT block them all — treat that as an extraction
+            # artifact. The skip ratio is configurable via
+            # `PDF_TEXT_MISSING_SIZE_SKIP_RATIO` (default 0.5 = 50%).
+            try:
+                skip_ratio = float(os.getenv("PDF_TEXT_MISSING_SIZE_SKIP_RATIO", "0.2"))
+            except Exception:
+                skip_ratio = 0.5
+
+            texts_on_page = page_obj.get("texts", []) or []
+            total_texts = len(texts_on_page)
+            missing_count = sum(1 for t in texts_on_page if t.get("size") is None)
+            # If the fraction of missing sizes is >= skip_ratio, assume page-wide
+            # extraction issue and do not mass-block missing-size blocks.
+            block_missing = True
+            try:
+                if (
+                    total_texts > 0
+                    and (missing_count / float(total_texts)) >= skip_ratio
+                ):
+                    block_missing = False
+            except Exception:
+                block_missing = True
+
+            if block_missing:
+                for t in texts_on_page:
+                    try:
+                        if t.get("size") is None:
+                            if not t.get("blocked"):
+                                t["blocked"] = True
+                                t["blocked_reason"] = (
+                                    t.get("blocked_reason") or "font_missing"
+                                )
+                    except Exception:
+                        # best-effort: don't fail the page extraction if this step errors
+                        pass
+            # Collect sizes for the page and compute quantiles. Default to
+            # sensible quantiles (5% low, 95% high) but allow overrides via
+            # environment variables PDF_TEXT_PAGE_MIN_QUANTILE and PDF_TEXT_PAGE_MAX_QUANTILE
+            try:
+                q_low = float(os.getenv("PDF_TEXT_PAGE_MIN_QUANTILE", "0.05"))
+                q_high = float(os.getenv("PDF_TEXT_PAGE_MAX_QUANTILE", "0.95"))
+            except Exception:
+                q_low = 0.05
+                q_high = 0.95
+
+            # gather numeric sizes present on the page
+            sizes = [
+                t["size"]
+                for t in page_obj.get("texts", [])
+                if t.get("size") is not None
+            ]
+
+            if sizes:
+                # Normalize sizes by rounding decimals for consistent grouping
+                try:
+                    round_decimals = int(os.getenv("PDF_TEXT_SIZE_ROUND_DECIMALS", "0"))
+                except Exception:
+                    round_decimals = 0
+
+                def key_size_local(v):
+                    try:
+                        return round(float(v), round_decimals)
+                    except Exception:
+                        return None
+
+                # compute simple quantiles WITHOUT numpy on normalized (rounded) sizes
+                sizes_norm = [
+                    key_size_local(s) for s in sizes if key_size_local(s) is not None
+                ]
+                sizes_sorted = sorted(sizes_norm)
+                n = len(sizes_sorted)
+
+                def pick_quantile(arr, q):
+                    if not arr:
+                        return None
+                    idx = q * (len(arr) - 1)
+                    lo = int(idx)
+                    hi = min(lo + 1, len(arr) - 1)
+                    frac = idx - lo
+                    return arr[lo] * (1 - frac) + arr[hi] * frac
+
+                # Quantiles are computed on the rounded-size values so that the
+                # outlier decision is consistent per-rounded-key across the page.
+                page_min_size = pick_quantile(sizes_sorted, max(0.0, min(1.0, q_low)))
+                page_max_size = pick_quantile(sizes_sorted, max(0.0, min(1.0, q_high)))
+
+                # If computed quantiles collapse (page has mostly same size),
+                # expand a small margin to avoid over-blocking; this uses a
+                # small relative epsilon.
+                if (
+                    page_min_size is not None
+                    and page_max_size is not None
+                    and page_max_size - page_min_size < 1e-6
+                ):
+                    eps = max(0.5, page_min_size * 0.05)
+                    page_min_size = max(0.0, page_min_size - eps)
+                    page_max_size = page_max_size + eps
+
+                # apply page-local blocking; keep any prior blocked flag (e.g., only_number)
+                # Additionally apply a rarity-based filter (font-size frequency per page)
+                try:
+                    keep_ratio = float(os.getenv("PDF_TEXT_SIZE_KEEP_RATIO", "0.15"))
+                except Exception:
+                    keep_ratio = 0.15
+
+                # Only enforce rarity rule for pages with at least this many text blocks
+                try:
+                    min_texts_for_rarity = int(
+                        os.getenv("PDF_TEXT_MIN_PAGE_TEXTS", "6")
+                    )
+                except Exception:
+                    min_texts_for_rarity = 6
+
+                # Round sizes for histogram counting: use decimals to normalize
+                try:
+                    round_decimals = int(os.getenv("PDF_TEXT_SIZE_ROUND_DECIMALS", "0"))
+                except Exception:
+                    round_decimals = 0
+
+                # Treat missing/null sizes as their own unique bucket key so that
+                # we can reason about their frequency/char-density independently.
+                NULL_KEY = "__NULL__"
+
+                def key_size(v):
+                    # Return a consistent key for histogram/char buckets.
+                    if v is None:
+                        return NULL_KEY
+                    try:
+                        return round(float(v), round_decimals)
+                    except Exception:
+                        return NULL_KEY
+
+                # Only consider text blocks with actual content when computing frequencies
+                text_blocks_with_content = [
+                    t for t in page_obj.get("texts", []) if t.get("content")
+                ]
+                total_texts = len(text_blocks_with_content)
+
+                # build frequency map for rounded sizes (by block count)
+                freq = {}
+                # build char-count map for rounded sizes (by total characters)
+                freq_chars = {}
+                total_chars = 0
+                for t in text_blocks_with_content:
+                    s = t.get("size")
+                    ks = key_size(s)
+                    freq[ks] = freq.get(ks, 0) + 1
+                    chars = len((t.get("content") or "").strip())
+                    freq_chars[ks] = freq_chars.get(ks, 0) + chars
+                    total_chars += chars
+
+                # Determine rarity mode and thresholds. Modes: 'blocks', 'chars', 'both'
+                rarity_mode = os.getenv("PDF_TEXT_SIZE_RARITY_MODE", "chars").lower()
+                try:
+                    keep_ratio_block = float(
+                        os.getenv("PDF_TEXT_SIZE_KEEP_RATIO", "0.15")
+                    )
+                except Exception:
+                    keep_ratio_block = 0.15
+                try:
+                    keep_ratio_char = float(
+                        os.getenv("PDF_TEXT_SIZE_KEEP_RATIO_CHAR", "0.10")
+                    )
+                except Exception:
+                    keep_ratio_char = 0.10
+                try:
+                    min_chars_for_rarity = int(
+                        os.getenv("PDF_TEXT_SIZE_MIN_CHARS", "30")
+                    )
+                except Exception:
+                    min_chars_for_rarity = 30
+
+                # Decide which rounded-size keys are considered "rare" according to the selected mode.
+                rare_keys = set()
+                if total_texts >= min_texts_for_rarity or (
+                    rarity_mode == "chars" and total_chars >= min_chars_for_rarity
+                ):
+                    # Evaluate each ks observed on the page
+                    for ks in set(list(freq.keys()) + list(freq_chars.keys())):
+                        block_ratio = (
+                            freq.get(ks, 0) / float(total_texts)
+                            if total_texts > 0
+                            else 0.0
+                        )
+                        char_ratio = (
+                            freq_chars.get(ks, 0) / float(total_chars)
+                            if total_chars > 0
+                            else 0.0
+                        )
+
+                        is_rare = False
+                        if rarity_mode == "blocks":
+                            is_rare = block_ratio < keep_ratio_block
+                        elif rarity_mode == "chars":
+                            # require enough chars to make a decision
+                            if total_chars >= min_chars_for_rarity:
+                                is_rare = char_ratio < keep_ratio_char
+                        else:  # both
+                            # mark rare only if BOTH block and char ratios are below thresholds
+                            if (
+                                total_chars >= min_chars_for_rarity
+                                and total_texts >= min_texts_for_rarity
+                            ):
+                                is_rare = (block_ratio < keep_ratio_block) and (
+                                    char_ratio < keep_ratio_char
+                                )
+
+                        if is_rare:
+                            rare_keys.add(ks)
+
+                # apply blocking: outlier (quantile) OR rarity (low frequency/char-density)
+                # We do per-rounded-key all-or-none assignment for rarity keys to avoid mixed states.
+                for t in page_obj.get("texts", []):
+                    s = t.get("size")
+                    # outlier checks (quantile computed earlier) - preserve prior reasons
+                    if s is not None:
+                        if page_min_size is not None and s < page_min_size:
+                            if not t.get("blocked"):
+                                t["blocked"] = True
+                                t["blocked_reason"] = (
+                                    t.get("blocked_reason") or "font_too_small"
+                                )
+                            continue
+                        if page_max_size is not None and s > page_max_size:
+                            if not t.get("blocked"):
+                                t["blocked"] = True
+                                t["blocked_reason"] = (
+                                    t.get("blocked_reason") or "font_too_large"
+                                )
+                            continue
+
+                    # rarity check: apply per-rounded-key decision (includes NULL_KEY)
+                    ks = key_size(s)
+                    if ks in rare_keys:
+                        # Only set blocked if no stronger reason already exists
+                        if not t.get("blocked"):
+                            t["blocked"] = True
+                            t["blocked_reason"] = (
+                                t.get("blocked_reason") or "font_too_rare"
+                            )
+
+            else:
+                # If no per-page sizes found, fall back to static env values
+                try:
+                    text_min = float(os.getenv("PDF_TEXT_MIN_SIZE", "6"))
+                    text_max = float(os.getenv("PDF_TEXT_MAX_SIZE", "12"))
+                except Exception:
+                    text_min = 6.0
+                    text_max = 12.0
+                for t in page_obj.get("texts", []):
+                    s = t.get("size")
+                    if s is None:
+                        continue
+                    if s < text_min:
+                        t["blocked"] = True
+                        t["blocked_reason"] = "font_too_small"
+                    elif s > text_max:
+                        t["blocked"] = True
+                        t["blocked_reason"] = "font_too_large"
 
             pages.append(page_obj)
 
@@ -1066,8 +1644,18 @@ class PDFStructureExtractor:
             formatted += f"  - Content: {text['content']}\n"
             formatted += f"  - Position: {text['bbox']}\n"
             formatted += (
-                f"  - Font: {text.get('font', '')} (Size: {text.get('size', '')})\n\n"
+                f"  - Font: {text.get('font', '')} (Size: {text.get('size', '')})\n"
             )
+            if text.get("width") and text.get("height"):
+                formatted += f"  - Box Size: {text.get('width')}x{text.get('height')}\n"
+            if text.get("color"):
+                formatted += f"  - Color: {text.get('color')}\n\n"
+            else:
+                formatted += "\n"
+            if text.get("color"):
+                formatted += f"  - Color: {text.get('color')}\n\n"
+            else:
+                formatted += "\n"
 
         return formatted
 
@@ -1088,7 +1676,16 @@ class PDFStructureExtractor:
             formatted += f"Text {i+1}:\n"
             formatted += f"  - Type: {text['type']}\n"
             formatted += f"  - Content: \"{text['content']}\"\n"
-            formatted += f"  - Position: {text['bbox']}\n\n"
+            formatted += f"  - Position: {text['bbox']}\n"
+            formatted += (
+                f"  - Font: {text.get('font', '')} (Size: {text.get('size', '')})\n"
+            )
+            if text.get("width") and text.get("height"):
+                formatted += f"  - Box Size: {text.get('width')}x{text.get('height')}\n"
+            if text.get("color"):
+                formatted += f"  - Color: {text.get('color')}\n\n"
+            else:
+                formatted += "\n"
 
         return formatted
 
@@ -1158,6 +1755,9 @@ class PDFStructureExtractor:
                         "bbox": text.get("bbox"),
                         "font": text.get("font"),
                         "size": text.get("size"),
+                        "color": text.get("color"),
+                        "width": text.get("width"),
+                        "height": text.get("height"),
                     }
                 )
 
@@ -2001,7 +2601,7 @@ def main(
         # Generate product visualization with colored bounding boxes
         print("\n🎨 Generating product visualization...")
         try:
-            from visualize_products import draw_bounding_boxes
+            from utils.visualize_products import draw_bounding_boxes
 
             color_mapping = draw_bounding_boxes(
                 xml_path=xml_file,
@@ -2051,12 +2651,27 @@ def main(
                     except Exception:
                         thresh = 50.0
 
+                    total_extra = 0
                     for _p in _j.get("pages", []):
                         try:
                             grp = _group_blocks_module.group_page(_p, threshold=thresh)
                         except Exception:
                             grp = []
-                        _p["groups"] = grp
+                        # Run the post-processing attachments stage so the grouped
+                        # JSON created by the pipeline includes the same safety
+                        # attachments run locally (and considers blocked images).
+                        try:
+                            new_grp, extra = (
+                                _group_blocks_module.attach_remaining_groups(
+                                    grp, threshold=thresh, page=_p
+                                )
+                            )
+                        except Exception:
+                            new_grp = grp
+                            extra = 0
+                        _p["groups"] = new_grp
+                        if extra:
+                            total_extra += extra
 
                     grouped_out = (
                         os.path.splitext(json_out)[0] + ".fullblocks.grouped.json"
@@ -2064,6 +2679,10 @@ def main(
                     with open(grouped_out, "w", encoding="utf-8") as _f:
                         _json.dump(_j, _f, indent=2, ensure_ascii=False)
                     print(f"✅ Grouped JSON saved: {grouped_out}")
+                    if total_extra:
+                        print(
+                            f"ℹ️  Post-processor made {total_extra} extra attachments across pages"
+                        )
                 except Exception as e:
                     print(f"⚠️ Failed to auto-group JSON: {e}")
             else:

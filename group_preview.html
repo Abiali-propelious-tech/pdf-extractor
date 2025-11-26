@@ -37,6 +37,56 @@
         padding: 12px;
         background: rgba(255, 255, 255, 0.03);
         border-radius: 8px;
+        /* Keep sidebar visible while scrolling */
+        position: sticky;
+        top: 70px; /* keep below top page padding */
+        align-self: flex-start; /* ensure sticky applies in flex layout */
+        z-index: 10; /* sit on top of main content overlays */
+      }
+
+      /* On narrow screens, use normal flow so the sidebar doesn't take
+         excessive space or cause layout issues */
+      @media (max-width: 900px) {
+        .viewer {
+          flex-direction: column;
+        }
+        .sidebar {
+          position: relative;
+          top: auto;
+          width: 100%;
+          max-height: none;
+        }
+      }
+      /* On wider screens make the sidebar fixed so it never leaves the viewport
+         while the user scrolls the page. Keep a left offset matching the page
+         padding and reserve space so the main area doesn't hide under the fixed box. */
+      @media (min-width: 901px) {
+        .sidebar {
+          position: fixed;
+          top: 70px;
+          left: 18px;
+          width: 340px;
+          max-height: calc(100vh - 36px);
+          overflow: auto;
+          box-shadow: 0 6px 30px rgba(0,0,0,0.45);
+        }
+        /* push the main content to the right so it doesn't sit under the fixed sidebar */
+        .viewer .main {
+          margin-left: calc(340px + 16px + 18px); /* sidebar width + gap + page padding */
+          /* make space at the top for a fixed top bar */
+          margin-top: 64px; /* matches top bar height + gap */
+        }
+        /* Fix the top bar so it remains visible; align it with the main content (to the right of sidebar) */
+        .top {
+          position: fixed;
+          top: 18px;
+          left: calc(18px + 340px + 16px);
+          right: 18px;
+          z-index: 30;
+          background: rgba(7,16,34,0.7);
+          padding: 8px 12px;
+          border-radius: 8px;
+        }
       }
       .main {
         flex: 1;
@@ -67,9 +117,28 @@
         border: 3px solid rgba(250, 180, 80, 0.95);
         background: rgba(250, 180, 80, 0.06);
         pointer-events: none;
+        transition: box-shadow 120ms ease, border-color 120ms ease;
       }
+
+      /* Selected/highlighted group - strong red border */
       .group-selected {
-        outline: 4px solid rgba(255, 255, 255, 0.12);
+        border: 3px solid rgba(240, 60, 60, 0.95) !important;
+        box-shadow: 0 0 0 6px rgba(240, 60, 60, 0.06);
+      }
+
+      /* Member boxes (dashed, light grey) to show constituent items in a group */
+      .member-box {
+        position: absolute;
+        box-sizing: border-box;
+        border: 2px dashed rgba(200, 200, 200, 0.75);
+        background: rgba(255, 255, 255, 0.015);
+        pointer-events: none;
+      }
+
+      /* Blocked text block overlay (solid black border) */
+      .member-box.blocked {
+        border: 2px solid rgba(10, 10, 10, 0.95);
+        background: rgba(0, 0, 0, 0.06);
       }
       .group-item {
         padding: 8px;
@@ -80,6 +149,10 @@
       }
       .group-item:hover {
         background: rgba(255, 255, 255, 0.03);
+      }
+      .group-item.selected {
+        border: 2px solid rgba(240, 60, 60, 0.95);
+        background: rgba(240, 60, 60, 0.06);
       }
       .group-meta {
         font-size: 13px;
@@ -107,6 +180,9 @@
         height: auto;
         border-radius: 4px;
       }
+      .thumb.blocked {
+        opacity: 0.5;
+      }
       .texts {
         flex: 1;
         max-height: 360px;
@@ -121,6 +197,14 @@
         border-radius: 4px;
         background: rgba(255, 255, 255, 0.01);
         font-size: 13px;
+      }
+      .text-block.blocked {
+        opacity: 0.45;
+        text-decoration: line-through;
+        color: #9fb0cc;
+        background: rgba(255, 255, 255, 0.005);
+        border: 2px solid rgba(10, 10, 10, 0.95);
+        padding: 6px;
       }
       .small {
         font-size: 13px;
@@ -149,6 +233,9 @@
       <div style="margin-left: auto" class="small">
         Click a group to preview its images & texts
       </div>
+      <label class="small" style="margin-left: 8px">
+        <input id="hideBlocked" type="checkbox" /> Hide blocked items
+      </label>
     </div>
 
     <div class="viewer">
@@ -159,6 +246,48 @@
       </div>
 
       <div class="main">
+        <div
+          style="
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+          "
+        >
+          <button
+            id="prevPageBtn"
+            class="btn"
+            style="padding: 6px 14px; font-size: 18px"
+          >
+            ⟨
+          </button>
+          <span id="pageInfo" class="small">Page 1</span>
+          <button
+            id="nextPageBtn"
+            class="btn"
+            style="padding: 6px 14px; font-size: 18px"
+          >
+            ⟩
+          </button>
+          <span
+            id="layoutInfo"
+            class="small"
+            style="margin-left: 18px; color: #fbbf24; font-weight: 600"
+          ></span>
+        </div>
+        <div
+          id="layoutDesc"
+          class="small"
+          style="
+            margin-bottom: 8px;
+            color: #fbbf24;
+            background: #23272e;
+            border-radius: 6px;
+            padding: 8px 12px;
+            display: none;
+          "
+        ></div>
         <div id="pageArea" class="page-wrap">
           <div id="pageContainer">No page loaded</div>
         </div>
@@ -235,6 +364,7 @@
       let data = null;
       let filesMap = {};
       let currentSelected = null; // {pageIndex, groupIndex}
+      let currentPage = 0;
 
       imgFolder.addEventListener("change", (e) => {
         const files = Array.from(e.target.files || []);
@@ -265,31 +395,53 @@
       });
 
       function renderGroups() {
+        // Called once after JSON load. Reset and show page 0 groups.
         groupsList.innerHTML = "";
         pageContainer.innerHTML = "";
         thumbs.innerHTML = "";
         texts.innerHTML = "";
         detailArea.style.display = "none";
         currentSelected = null;
+        currentPage = 0;
         if (!data) return;
         meta.textContent = `Source: ${data.source || "unknown"} — pages: ${
           data.total_pages || data.pages.length
         }`;
-        data.pages.forEach((p, pi) => {
-          (p.groups || []).forEach((g, gi) => {
-            const el = document.createElement("div");
-            el.className = "group-item";
-            el.innerHTML = `<strong>Group ${
-              gi + 1
-            }</strong><div class="group-meta">page ${p.page_number} — ${
-              g.images.length
-            } images, ${g.texts.length} texts</div>`;
-            el.addEventListener("click", () => selectGroup(pi, gi));
-            groupsList.appendChild(el);
+        renderGroupsForPage(currentPage);
+        renderPageView(currentPage);
+        updatePageInfo();
+      }
+
+      function renderGroupsForPage(pageIdx) {
+        // Populate sidebar groups list for a single page (pageIdx).
+        groupsList.innerHTML = "";
+        if (!data || !data.pages || !data.pages[pageIdx]) return;
+        const p = data.pages[pageIdx];
+        const groups = p.groups || [];
+        if (groups.length === 0) {
+          const e = document.createElement("div");
+          e.className = "small";
+          e.textContent = "No groups on this page.";
+          groupsList.appendChild(e);
+          return;
+        }
+        groups.forEach((g, gi) => {
+          const el = document.createElement("div");
+          el.className = "group-item";
+          el.innerHTML = `<strong>Group ${
+            gi + 1
+          }</strong><div class="group-meta">page ${p.page_number} — ${
+            g.images.length
+          } images, ${g.texts.length} texts</div>`;
+          el.dataset.gi = gi;
+          el.dataset.page = pageIdx;
+          el.addEventListener("click", () => {
+            // ensure sidebar selection keeps current page in sync
+            currentPage = pageIdx;
+            selectGroup(pageIdx, gi);
           });
+          groupsList.appendChild(el);
         });
-        // render first page image area (show page image to overlay groups)
-        renderPageView(0);
       }
 
       function renderPageView(pageIndex) {
@@ -299,8 +451,12 @@
         img.className = "page-img";
         // prefer an image file from page.images[0].file
         let imgPath = "";
-        if (p.images && p.images.length > 0) imgPath = p.images[0].file;
-        if (!imgPath && p.full_image) imgPath = p.full_image;
+        // Prefer full page image if available
+        if (p.full_image) {
+          imgPath = p.full_image;
+        } else if (p.images && p.images.length > 0) {
+          imgPath = p.images[0].file;
+        }
         img.src = resolvePath(imgPath) || "";
         img.alt = `page-${p.page_number}`;
         pageContainer.appendChild(img);
@@ -311,6 +467,14 @@
         ov.style.top = "8px";
         ov.style.pointerEvents = "none";
         pageContainer.appendChild(ov);
+
+        // Show detected layout
+        const layoutInfo = document.getElementById("layoutInfo");
+        if (layoutInfo) {
+          layoutInfo.textContent = p._detected_layout
+            ? `Layout: ${p._detected_layout}`
+            : "";
+        }
 
         img.addEventListener("load", () => {
           // compute scale relative to PDF units
@@ -327,7 +491,128 @@
             box.dataset.gi = gi;
             ov.appendChild(box);
           });
+
+          // Render blocked items (text/image) so they are visible on-page
+          try {
+            const hide = document.getElementById("hideBlocked").checked;
+            if (!hide) {
+              (p.texts || []).forEach((t) => {
+                try {
+                  if (t && t.bbox && t.blocked) {
+                    const bb = makeBoxEl(t.bbox, pageRect);
+                    bb.classList.add("member-box", "blocked");
+                    ov.appendChild(bb);
+                  }
+                } catch (e) {}
+              });
+
+              (p.images || []).forEach((im) => {
+                try {
+                  if (im && im.bbox && im.blocked) {
+                    const bb = makeBoxEl(im.bbox, pageRect);
+                    bb.classList.add("member-box", "blocked");
+                    ov.appendChild(bb);
+                  }
+                } catch (e) {}
+              });
+            }
+          } catch (e) {
+            // ignore overlay errors
+          }
         });
+        updatePageInfo();
+      }
+
+      // Layout descriptions and handling strategies
+      const layoutDetails = {
+        catalog_grid: {
+          desc: "<b>Catalog grid</b>: Product images are arranged in a wide, regular grid (like a catalog or lookbook). Each image usually pairs with a short caption, product code and a price. The spatial relationships are mostly horizontal — image above text or image beside a caption.",
+          handle:
+            "<b>Grouping strategy:</b> Aggressive horizontal search with a wide radius. We expand image boxes horizontally to capture captions and prices; allow up to ~12 text blocks so multi-line descriptions remain attached. Tight text-text grouping keeps multi-line captions intact.",
+        },
+        table_grid: {
+          desc: "<b>Table grid</b>: A regular grid of visually similar cells (images and text) arranged in rows and columns. Each cell should be independent — merging across cell boundaries is undesirable.",
+          handle:
+            "<b>Grouping strategy:</b> Conservative thresholds and strict alignment checks. We require strong horizontal/vertical alignment and small search radii so each grid cell stays separate. Limit groups to small text counts to avoid cross-cell merges.",
+        },
+        multi_column: {
+          desc: "<b>Multi-column</b>: Multiple vertical columns of flowing text (magazine, article), possibly with inline images. Text belongs to its column and shouldn't jump columns.",
+          handle:
+            "<b>Grouping strategy:</b> Respect column buckets — group text vertically inside the same column, attach images to the nearest column group, and prefer vertical proximity for caption attachment. Increase text-text grouping threshold within columns.",
+        },
+        sidebar: {
+          desc: "<b>Sidebar</b>: Images/blocks appear on one side while the main body of text is on the opposite side (left or right). The relation between sidebar image and main text may cross a horizontal gap.",
+          handle:
+            "<b>Grouping strategy:</b> Use a wider horizontal search when matching sidebar images to nearby main content, with relaxed alignment checks across the page midline. Limit group expansion to avoid grabbing unrelated blocks.",
+        },
+        centered_cluster: {
+          desc: "<b>Centered cluster</b>: One or more images are concentrated toward the center, with supporting text (captions) around them. Useful for feature spreads or hero sections.",
+          handle:
+            "<b>Grouping strategy:</b> Conservative radius with higher alignment requirements; keep clusters small so surrounding body text isn't swallowed. Prioritize nearest-image attachment and strict bbox overlap checks.",
+        },
+        vertical_flow: {
+          desc: "<b>Vertical flow</b>: Reading order is top-to-bottom; images appear inline with columns of text (like a blog or article).",
+          handle:
+            "<b>Grouping strategy:</b> Favor vertical proximity to the image for captions and rely on reading-order heuristics. Allow moderate group sizes but respect text-only group boundaries.",
+        },
+        horizontal_strips: {
+          desc: "<b>Horizontal strips</b>: Page content is organized into horizontal bands (strips), where related text and images lie in the same band.",
+          handle:
+            "<b>Grouping strategy:</b> Strong horizontal grouping across the strip; widen horizontal search and allow grouping of elements aligned within the band.",
+        },
+        scattered_dense: {
+          desc: "<b>Scattered dense</b>: Many small elements packed closely (icons, thumbnails). Visual density is high and proximity thresholds should be tight.",
+          handle:
+            "<b>Grouping strategy:</b> Tight radii and strict merges: prefer small groups, prioritize bbox overlap, and avoid aggressive attachments.",
+        },
+        scattered_sparse: {
+          desc: "<b>Scattered sparse</b>: Few elements spread across the page. Related items may be separated by larger gaps.",
+          handle:
+            "<b>Grouping strategy:</b> Increase search radius and directional tolerance to connect distant but related items (e.g., image + caption separated by whitespace). Allow larger groups but enforce capacity limits.",
+        },
+        full_page_single: {
+          desc: "<b>Full page single</b>: One or a few very large elements dominate the page (hero images, title slides). The page is visually unified.",
+          handle:
+            "<b>Grouping strategy:</b> Aggressively group most content into a single group since everything likely belongs together. Use high radius and permissive alignment.",
+        },
+        mixed_density: {
+          desc: "<b>Mixed density</b>: The page contains both dense clusters and sparse areas — e.g., a collage or mixed-content magazine page.",
+          handle:
+            "<b>Grouping strategy:</b> Adaptive: apply tight grouping inside dense clusters and looser rules for sparse regions. Use local density inspection before merging.",
+        },
+        scattered: {
+          desc: "<b>Scattered</b>: Fallback/unclassified layout — treat conservatively or with default rules.",
+          handle:
+            "<b>Grouping strategy:</b> Use default thresholds with safe caps to avoid runaway groups.",
+        },
+      };
+
+      function updatePageInfo() {
+        const pageInfo = document.getElementById("pageInfo");
+        const layoutDesc = document.getElementById("layoutDesc");
+        if (!data || !data.pages) return;
+        if (pageInfo) {
+          pageInfo.textContent = `Page ${currentPage + 1} / ${
+            data.pages.length
+          }`;
+        }
+        // update layout info as well
+        const layoutInfo = document.getElementById("layoutInfo");
+        let layoutType =
+          data.pages[currentPage] && data.pages[currentPage]._detected_layout;
+        if (layoutInfo) {
+          layoutInfo.textContent = layoutType ? `Layout: ${layoutType}` : "";
+        }
+        // Show layout description and handling
+        if (layoutDesc) {
+          if (layoutType && layoutDetails[layoutType]) {
+            layoutDesc.style.display = "block";
+            layoutDesc.innerHTML = `<b>Description:</b> ${layoutDetails[layoutType].desc}<br/><b>Grouping strategy:</b> ${layoutDetails[layoutType].handle}`;
+          } else {
+            layoutDesc.style.display = "none";
+            layoutDesc.innerHTML = "";
+          }
+        }
       }
 
       function makeBoxEl(bbox, pageRect) {
@@ -364,21 +649,94 @@
           const p = data.pages[pageIndex];
           const ov = pageContainer.querySelector(".overlay");
           if (!ov) return;
-          // remove previous highlights
-          ov.querySelectorAll(".group-box").forEach(
-            (n) => (n.style.boxShadow = "none")
+          // remove previous highlights / member overlays
+          ov.querySelectorAll(".group-box").forEach((n) =>
+            n.classList.remove("group-selected")
           );
+          ov.querySelectorAll(".member-box").forEach((n) => n.remove());
           const boxes = ov.querySelectorAll(".group-box");
           const target = Array.from(boxes).find(
             (b) => parseInt(b.dataset.gi, 10) === groupIndex
           );
           if (target) {
-            target.style.boxShadow = "0 0 0 4px rgba(255,255,255,0.08)";
+            target.classList.add("group-selected");
             target.scrollIntoView({ behavior: "smooth", block: "center" });
+
+            // draw dashed member boxes for images and texts in page overlay
+            const imgEl = pageContainer.querySelector(".page-img");
+            const pageRect = {
+              width: p.width || (imgEl ? imgEl.naturalWidth : 0),
+              height: p.height || (imgEl ? imgEl.naturalHeight : 0),
+              imgEl: imgEl,
+            };
+
+            // ensure page-level blocked overlays remain visible even when a group is selected
+            try {
+              const hide = document.getElementById("hideBlocked").checked;
+              if (!hide) {
+                (p.texts || []).forEach((t) => {
+                  try {
+                    if (t && t.bbox && t.blocked) {
+                      const bb = makeBoxEl(t.bbox, pageRect);
+                      bb.classList.add("member-box", "blocked");
+                      ov.appendChild(bb);
+                    }
+                  } catch (e) {}
+                });
+                (p.images || []).forEach((im) => {
+                  try {
+                    if (im && im.bbox && im.blocked) {
+                      const bb = makeBoxEl(im.bbox, pageRect);
+                      bb.classList.add("member-box", "blocked");
+                      ov.appendChild(bb);
+                    }
+                  } catch (e) {}
+                });
+              }
+            } catch (e) {}
+
+            // group object for this selection
+            const g =
+              p.groups && p.groups.length > 0 ? p.groups[groupIndex] : null;
+
+            // draw each image/text member as a dashed box; mark blocked ones
+            (g && g.images ? g.images : []).forEach((im) => {
+              try {
+                if (!im || !im.bbox) return;
+                const b = makeBoxEl(im.bbox, pageRect);
+                b.classList.add("member-box");
+                if (im.blocked) b.classList.add("blocked");
+                ov.appendChild(b);
+              } catch (e) {
+                /* ignore invalid bbox */
+              }
+            });
+
+            (g && g.texts ? g.texts : []).forEach((t) => {
+              try {
+                if (!t || !t.bbox) return;
+                const b = makeBoxEl(t.bbox, pageRect);
+                b.classList.add("member-box");
+                if (t.blocked) b.classList.add("blocked");
+                ov.appendChild(b);
+              } catch (e) {
+                /* ignore invalid bbox */
+              }
+            });
           }
 
+          // update sidebar selected state
+          (groupsList.querySelectorAll(".group-item") || []).forEach((n) =>
+            n.classList.remove("selected")
+          );
+          const sideEl = groupsList.querySelector(
+            `[data-gi="${groupIndex}"][data-page="${pageIndex}"]`
+          );
+          if (sideEl) sideEl.classList.add("selected");
+
           // populate thumbs and texts
-          const g = p.groups[groupIndex];
+          const g =
+            p.groups && p.groups.length > 0 ? p.groups[groupIndex] : null;
           thumbs.innerHTML = "";
           texts.innerHTML = "";
           detailArea.style.display = "flex";
@@ -432,10 +790,103 @@
               d.style.background = "rgba(250,180,80,0.06)";
               d.style.pointerEvents = "none";
               if (gi === groupIndex) {
-                d.style.outline = "4px solid rgba(255,255,255,0.12)";
+                d.classList.add("group-selected");
               }
               fullOverlay.appendChild(d);
             });
+            // draw member boxes inside fullOverlay for the selected group
+            // clear any previous member boxes (prepare for drawing page-level blocked and group-members)
+            fullOverlay
+              .querySelectorAll(".member-box")
+              .forEach((n) => n.remove());
+
+            // then draw the page-level blocked items so they remain visible
+            try {
+              const hide = document.getElementById("hideBlocked").checked;
+              if (!hide) {
+                (p.texts || []).forEach((t) => {
+                  try {
+                    if (t && t.bbox && t.blocked) {
+                      const [x0, y0, x1, y1] = t.bbox;
+                      const left = x0 * sx;
+                      const top = y0 * sy;
+                      const w = (x1 - x0) * sx;
+                      const h = (y1 - y0) * sy;
+                      const eb = document.createElement("div");
+                      eb.style.position = "absolute";
+                      eb.style.left = left + "px";
+                      eb.style.top = top + "px";
+                      eb.style.width = w + "px";
+                      eb.style.height = h + "px";
+                      eb.className = "member-box blocked";
+                      fullOverlay.appendChild(eb);
+                    }
+                  } catch (e) {}
+                });
+                (p.images || []).forEach((im) => {
+                  try {
+                    if (im && im.bbox && im.blocked) {
+                      const [x0, y0, x1, y1] = im.bbox;
+                      const left = x0 * sx;
+                      const top = y0 * sy;
+                      const w = (x1 - x0) * sx;
+                      const h = (y1 - y0) * sy;
+                      const eb = document.createElement("div");
+                      eb.style.position = "absolute";
+                      eb.style.left = left + "px";
+                      eb.style.top = top + "px";
+                      eb.style.width = w + "px";
+                      eb.style.height = h + "px";
+                      eb.className = "member-box blocked";
+                      fullOverlay.appendChild(eb);
+                    }
+                  } catch (e) {}
+                });
+              }
+            } catch (e) {}
+            const selGrp = p.groups[groupIndex];
+            if (selGrp) {
+              (selGrp.images || []).forEach((im) => {
+                try {
+                  if (!im || !im.bbox) return;
+                  const [x0, y0, x1, y1] = im.bbox;
+                  const left = x0 * sx;
+                  const top = y0 * sy;
+                  const w = (x1 - x0) * sx;
+                  const h = (y1 - y0) * sy;
+                  const mb = document.createElement("div");
+                  mb.style.position = "absolute";
+                  mb.style.left = left + "px";
+                  mb.style.top = top + "px";
+                  mb.style.width = w + "px";
+                  mb.style.height = h + "px";
+                  mb.className = "member-box";
+                  if (im.blocked) mb.classList.add("blocked");
+                  fullOverlay.appendChild(mb);
+                } catch (e) {}
+              });
+
+              (selGrp.texts || []).forEach((t) => {
+                try {
+                  if (!t || !t.bbox) return;
+                  const [x0, y0, x1, y1] = t.bbox;
+                  const left = x0 * sx;
+                  const top = y0 * sy;
+                  const w = (x1 - x0) * sx;
+                  const h = (y1 - y0) * sy;
+                  const mb = document.createElement("div");
+                  mb.style.position = "absolute";
+                  mb.style.left = left + "px";
+                  mb.style.top = top + "px";
+                  mb.style.width = w + "px";
+                  mb.style.height = h + "px";
+                  mb.className = "member-box";
+                  if (t.blocked) mb.classList.add("blocked");
+                  fullOverlay.appendChild(mb);
+                } catch (e) {}
+              });
+            }
+
             // center selected group in the scrollable fullView
             const selBox = fullOverlay.children[groupIndex];
             if (selBox) {
@@ -452,7 +903,9 @@
               );
             }
           };
+          const hide = document.getElementById("hideBlocked").checked;
           (g.images || []).forEach((im) => {
+            if (hide && im.blocked) return;
             const div = document.createElement("div");
             div.className = "thumb";
             const img = document.createElement("img");
@@ -464,8 +917,16 @@
               if (fp) window.open(fp, "_blank");
             });
             thumbs.appendChild(div);
+            if (im.blocked) {
+              div.classList.add("blocked");
+              const tag = document.createElement("div");
+              tag.className = "muted";
+              tag.textContent = `Blocked: ${im.blocked_reason || "image_junk"}`;
+              div.appendChild(tag);
+            }
           });
           (g.texts || []).forEach((t) => {
+            if (hide && t.blocked) return;
             const d = document.createElement("div");
             d.className = "text-block";
             d.innerHTML = `<div style="font-weight:600">${
@@ -475,6 +936,20 @@
               t.text ||
               t
             ).toString()}</div>`;
+            // Show font, size, color, width & height when available
+            const meta = [];
+            if (t.font) meta.push(`Font: ${t.font}`);
+            if (t.size) meta.push(`Size: ${t.size}`);
+            if (t.color) meta.push(`Color: ${t.color}`);
+            if (t.width && t.height) meta.push(`Box: ${t.width}x${t.height}`);
+            if (meta.length)
+              d.innerHTML += `<div class="muted">${meta.join(" • ")}</div>`;
+            if (t.blocked) {
+              d.classList.add("blocked");
+              d.innerHTML += `<div class="muted">Blocked: ${
+                t.blocked_reason || "unknown"
+              }</div>`;
+            }
             texts.appendChild(d);
           });
         }, 120);
@@ -492,6 +967,57 @@
           } else {
             fv.style.display = "none";
             btn.textContent = "🔍 Show full page";
+          }
+        });
+      })();
+
+      // Carousel navigation (keeps sidebar groups and layout info in sync)
+      (function () {
+        const prevBtn = document.getElementById("prevPageBtn");
+        const nextBtn = document.getElementById("nextPageBtn");
+        if (!prevBtn || !nextBtn) return;
+        prevBtn.addEventListener("click", () => {
+          if (!data || !data.pages) return;
+          if (currentPage > 0) {
+            currentPage--;
+            renderGroupsForPage(currentPage);
+            renderPageView(currentPage);
+            thumbs.innerHTML = "";
+            texts.innerHTML = "";
+            detailArea.style.display = "none";
+            updatePageInfo();
+          }
+        });
+        nextBtn.addEventListener("click", () => {
+          if (!data || !data.pages) return;
+          if (currentPage < data.pages.length - 1) {
+            currentPage++;
+            renderGroupsForPage(currentPage);
+            renderPageView(currentPage);
+            thumbs.innerHTML = "";
+            texts.innerHTML = "";
+            detailArea.style.display = "none";
+            updatePageInfo();
+          }
+        });
+      })();
+
+      // react to hideBlocked toggles so overlays update immediately
+      (function () {
+        const cb = document.getElementById("hideBlocked");
+        if (!cb) return;
+        cb.addEventListener("change", () => {
+          // refresh page overlays and selection rendering
+          if (!data || !data.pages) return;
+          renderPageView(currentPage);
+          if (currentSelected) {
+            // slight delay to ensure pageContainer overlays exist
+            setTimeout(() => {
+              selectGroup(
+                currentSelected.pageIndex,
+                currentSelected.groupIndex
+              );
+            }, 120);
           }
         });
       })();
