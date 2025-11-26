@@ -39,7 +39,7 @@
         border-radius: 8px;
         /* Keep sidebar visible while scrolling */
         position: sticky;
-        top: 70px; /* keep below top page padding */
+        top: 25px; /* keep below top page padding */
         align-self: flex-start; /* ensure sticky applies in flex layout */
         z-index: 10; /* sit on top of main content overlays */
       }
@@ -63,7 +63,7 @@
       @media (min-width: 901px) {
         .sidebar {
           position: fixed;
-          top: 70px;
+          top: 25px;
           left: 18px;
           width: 340px;
           max-height: calc(100vh - 36px);
@@ -75,8 +75,8 @@
           margin-left: calc(
             340px + 16px + 18px
           ); /* sidebar width + gap + page padding */
-          /* make space at the top for a fixed top bar */
-          margin-top: 64px; /* matches top bar height + gap */
+          /* make space at the top for fixed top/nav/layout bar */
+          margin-top: 180px; /* reserve room for fixed top + controls + layoutDesc */
         }
         /* Fix the top bar so it remains visible; align it with the main content (to the right of sidebar) */
         .top {
@@ -85,9 +85,48 @@
           left: calc(18px + 340px + 16px);
           right: 18px;
           z-index: 30;
-          background: rgba(7, 16, 34, 0.7);
+          /* Use a solid header color so the bar reads like a header while scrolling */
+          background: #071022; /* fully opaque */
+          border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+          box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
           padding: 8px 12px;
           border-radius: 8px;
+        }
+        /* Fixed page controls (prev/next/pageInfo) right under the top bar */
+        .viewer .main > div:first-child {
+          position: fixed;
+          top: 72px;
+          left: calc(18px + 340px + 16px);
+          right: 18px;
+          z-index: 25;
+          /* make the controls appear as part of the header area (non-transparent) */
+          background: #081428; /* solid, slightly different tone */
+          padding: 6px 12px;
+          border-radius: 8px;
+          display: flex;
+          gap: 16px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+        /* Fixed layout description sits below the controls */
+        #layoutDesc {
+          position: fixed;
+          top: 120px; /* just below controls */
+          left: calc(18px + 340px + 16px);
+          right: 18px;
+          z-index: 24;
+          /* Use an opaque background to avoid the page peeking through */
+          background: #23272e; /* same tone as element inline style but not translucent */
+          padding: 8px 12px;
+          border-radius: 6px;
+        }
+        /* Ensure the main page view remains in the normal document flow
+           (not sticky) so content scrolls naturally under the fixed controls. */
+        #pageArea {
+          position: relative;
+          top: auto;
+          max-height: none;
+          overflow: visible;
         }
       }
       .main {
@@ -249,13 +288,7 @@
 
       <div class="main">
         <div
-          style="
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            margin-bottom: 8px;
-            flex-wrap: wrap;
-          "
+          style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap"
         >
           <button
             id="prevPageBtn"
