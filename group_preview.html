@@ -68,11 +68,13 @@
           width: 340px;
           max-height: calc(100vh - 36px);
           overflow: auto;
-          box-shadow: 0 6px 30px rgba(0,0,0,0.45);
+          box-shadow: 0 6px 30px rgba(0, 0, 0, 0.45);
         }
         /* push the main content to the right so it doesn't sit under the fixed sidebar */
         .viewer .main {
-          margin-left: calc(340px + 16px + 18px); /* sidebar width + gap + page padding */
+          margin-left: calc(
+            340px + 16px + 18px
+          ); /* sidebar width + gap + page padding */
           /* make space at the top for a fixed top bar */
           margin-top: 64px; /* matches top bar height + gap */
         }
@@ -83,7 +85,7 @@
           left: calc(18px + 340px + 16px);
           right: 18px;
           z-index: 30;
-          background: rgba(7,16,34,0.7);
+          background: rgba(7, 16, 34, 0.7);
           padding: 8px 12px;
           border-radius: 8px;
         }
