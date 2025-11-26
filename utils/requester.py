@@ -1,5 +1,6 @@
 import requests
 
+
 def graphql_requester(query, variables=None, headers=None):
     """
     Sends a POST request to a GraphQL endpoint.
@@ -15,18 +16,15 @@ def graphql_requester(query, variables=None, headers=None):
     url = "https://coral-app-fmgao.ondigitalocean.app/graphql"
 
     if headers is None:
-        headers = {
-            "Content-Type": "application/json"
-        }
+        headers = {"Content-Type": "application/json"}
 
-    payload = {
-        "query": query,
-        "variables": variables or {}
-    }
+    payload = {"query": query, "variables": variables or {}}
 
     response = requests.post(url, json=payload, headers=headers)
 
     if response.status_code == 200:
         return response.json().get("data")
     else:
-        raise Exception(f"GraphQL request failed with status {response.status_code}: {response.text}")
+        raise Exception(
+            f"GraphQL request failed with status {response.status_code}: {response.text}"
+        )

@@ -5,6 +5,8 @@ AI-powered PDF extraction tool that identifies products from catalogue PDFs and 
 ## Features
 
 - **PDF to XML Extraction**: Extracts structured data from PDFs including text blocks and images with coordinates
+- **PDF to XML Extraction**: Extracts structured data from PDFs including text blocks and images with coordinates
+  - Text extraction now includes `font`, `size`, and `color` attributes for each text block.
 - **AI-Enhanced Analysis**: Uses Google Gemini AI to intelligently match products with their images and descriptions
 - **Product Visualization**: Creates annotated images with colored bounding boxes around each product
 - **Color Mapping**: Generates interactive HTML legends mapping box colors to product images
@@ -47,19 +49,42 @@ python visualize_products.py ./output/pdf_name
 
 ## Output Structure
 
-```
+````
 output/
 ├── pdf_name/
 │   ├── pdf_name_structure.xml          # Structured XML with all elements
-│   ├── pdf_name_ai_products.json       # AI-extracted products
-│   ├── pdf_name_progress.json          # Extraction progress
-│   └── images/
-│       ├── page_1_full.png             # Full page snapshot
-│       ├── page_1_image_*.png          # Individual product images
-│       ├── page_1_annotated.png        # ⭐ Full page with colored boxes
-│       ├── page_1_color_mapping.json   # ⭐ Color to image mapping
-│       └── page_1_legend.html          # ⭐ Interactive HTML legend
-```
+Text blocks in the XML/JSON now include additional attributes:
+- `font`: the font name used by the text span (if detected)
+- `size`: font size in points (float, when available)
+- `color`: hexadecimal color code of the text (e.g. `#000000` for black)
+ - `width`: width of the text block in PDF points (float)
+ - `height`: height of the text block in PDF points (float)
+
+Example text block in JSON:
+```json
+{
+   "id": "text_0_3",
+   "content": "Classic modern chair",
+   "type": "title",
+   "bbox": [10.5, 12.2, 200.5, 40.3],
+   "font": "Helvetica-Bold",
+   "size": 18.0,
+   "width": 143.8,
+   "height": 26.9,
+   "color": "#000000"
+}
+````
+
+│ ├── pdf*name_ai_products.json # AI-extracted products
+│ ├── pdf_name_progress.json # Extraction progress
+│ └── images/
+│ ├── page_1_full.png # Full page snapshot
+│ ├── page_1_image*\*.png # Individual product images
+│ ├── page_1_annotated.png # ⭐ Full page with colored boxes
+│ ├── page_1_color_mapping.json # ⭐ Color to image mapping
+│ └── page_1_legend.html # ⭐ Interactive HTML legend
+
+````
 
 ## Product Visualization Features
 
@@ -86,7 +111,7 @@ The visualization tool creates:
        "height": "76.7"
      }
    ]
-   ```
+````
 
 3. **Interactive HTML Legend** (`*_legend.html`)
    - Visual legend showing each product with its color
@@ -96,13 +121,19 @@ The visualization tool creates:
 
 ## Environment Variables
 
-- `GEMINI_API_KEY` - Required for AI features
-- `PDF_EXTRACTOR_NO_AI` - Set to `1` to disable AI
-- `PDF_EXTRACTOR_DEBUG_IMAGES` - Set to `1` for detailed image extraction logs
-- `PDF_EXTRACTOR_GHOST_FILTER` - Set to `1` to enable ghost/text image filtering
-- `PDF_EXTRACTOR_GHOST_MODE` - `light`, `balanced`, or `strict` filtering
-- `PDF_EXTRACTOR_MIN_RECT_SIDE_PTS` - Minimum image side in points (default: 25)
-- `PDF_EXTRACTOR_MIN_RECT_AREA_FRAC` - Minimum area fraction (default: 0.001)
+- `PDF_IMAGE_MIN_DIM_FRAC` - Minimum width/height fraction of page to keep image (default: 0.05)
+- `PDF_IMAGE_MAX_DIM_FRAC` - Maximum width/height fraction of page to keep image (default: 0.4)
+
+### Blocking Junk Content (headers/footers and display images)
+
+The extractor now marks obvious junk content (headers/footers and overly large/small images) as `blocked` in the JSON. Grouping will skip blocked elements.
+
+By default:
+
+- text font sizes outside [6, 12] are considered headers/footers and will be blocked; adjust with `PDF_TEXT_MIN_FONT_SIZE` and `PDF_TEXT_MAX_FONT_SIZE`.
+- images whose area is <= `PDF_IMAGE_MIN_AREA_FRAC` (default 0.05) or >= `PDF_IMAGE_MAX_AREA_FRAC` (default 0.4) are blocked.
+
+You can customize these thresholds using environment variables. The group preview shows blocked elements with a strikethrough and a reason tag.
 
 ## How It Works
 

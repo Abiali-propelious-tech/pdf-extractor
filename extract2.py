@@ -15,9 +15,9 @@ from typing import List, Dict, Any
 from dotenv import load_dotenv
 import glob
 import re
-from requester import graphql_requester
-from json_parser import parse_ai_json_response
-from text_filter import DynamicTextFilter
+from utils.requester import graphql_requester
+from utils.json_parser import parse_ai_json_response
+from utils.text_filter import DynamicTextFilter
 
 load_dotenv()
 # Optional OCR imports
@@ -42,7 +42,8 @@ except ImportError:
 
 # Optional grouping helper used to post-process JSON into grouped blocks
 try:
-    import group_blocks as _group_blocks_module
+    # grouping implementation now lives under scripts/
+    import scripts.group_blocks as _group_blocks_module
 except Exception:
     _group_blocks_module = None
 
@@ -989,7 +990,10 @@ class PDFStructureExtractor:
                         # simple punctuation. This rejects tokens containing letters
                         # (eg '400x100'). \n is included in \s so multiline numeric
                         # blocks like '137\n138' will be considered numeric-only.
-                        if re.match(r"^[\s\+\-]*\d+(?:[\.,]\d+)?(?:[\s,;:/\-\+]+\d+(?:[\.,]\d+)?)*\s*$", content):
+                        if re.match(
+                            r"^[\s\+\-]*\d+(?:[\.,]\d+)?(?:[\s,;:/\-\+]+\d+(?:[\.,]\d+)?)*\s*$",
+                            content,
+                        ):
                             page_obj["texts"][-1]["blocked"] = True
                             page_obj["texts"][-1]["blocked_reason"] = "only_number"
                 except Exception:
@@ -1033,7 +1037,10 @@ class PDFStructureExtractor:
             # extraction issue and do not mass-block missing-size blocks.
             block_missing = True
             try:
-                if total_texts > 0 and (missing_count / float(total_texts)) >= skip_ratio:
+                if (
+                    total_texts > 0
+                    and (missing_count / float(total_texts)) >= skip_ratio
+                ):
                     block_missing = False
             except Exception:
                 block_missing = True
@@ -1044,7 +1051,9 @@ class PDFStructureExtractor:
                         if t.get("size") is None:
                             if not t.get("blocked"):
                                 t["blocked"] = True
-                                t["blocked_reason"] = t.get("blocked_reason") or "font_missing"
+                                t["blocked_reason"] = (
+                                    t.get("blocked_reason") or "font_missing"
+                                )
                     except Exception:
                         # best-effort: don't fail the page extraction if this step errors
                         pass
@@ -1059,7 +1068,11 @@ class PDFStructureExtractor:
                 q_high = 0.95
 
             # gather numeric sizes present on the page
-            sizes = [t["size"] for t in page_obj.get("texts", []) if t.get("size") is not None]
+            sizes = [
+                t["size"]
+                for t in page_obj.get("texts", [])
+                if t.get("size") is not None
+            ]
 
             if sizes:
                 # Normalize sizes by rounding decimals for consistent grouping
@@ -1075,7 +1088,9 @@ class PDFStructureExtractor:
                         return None
 
                 # compute simple quantiles WITHOUT numpy on normalized (rounded) sizes
-                sizes_norm = [key_size_local(s) for s in sizes if key_size_local(s) is not None]
+                sizes_norm = [
+                    key_size_local(s) for s in sizes if key_size_local(s) is not None
+                ]
                 sizes_sorted = sorted(sizes_norm)
                 n = len(sizes_sorted)
 
@@ -1096,7 +1111,11 @@ class PDFStructureExtractor:
                 # If computed quantiles collapse (page has mostly same size),
                 # expand a small margin to avoid over-blocking; this uses a
                 # small relative epsilon.
-                if page_min_size is not None and page_max_size is not None and page_max_size - page_min_size < 1e-6:
+                if (
+                    page_min_size is not None
+                    and page_max_size is not None
+                    and page_max_size - page_min_size < 1e-6
+                ):
                     eps = max(0.5, page_min_size * 0.05)
                     page_min_size = max(0.0, page_min_size - eps)
                     page_max_size = page_max_size + eps
@@ -1110,7 +1129,9 @@ class PDFStructureExtractor:
 
                 # Only enforce rarity rule for pages with at least this many text blocks
                 try:
-                    min_texts_for_rarity = int(os.getenv("PDF_TEXT_MIN_PAGE_TEXTS", "6"))
+                    min_texts_for_rarity = int(
+                        os.getenv("PDF_TEXT_MIN_PAGE_TEXTS", "6")
+                    )
                 except Exception:
                     min_texts_for_rarity = 6
 
@@ -1134,7 +1155,9 @@ class PDFStructureExtractor:
                         return NULL_KEY
 
                 # Only consider text blocks with actual content when computing frequencies
-                text_blocks_with_content = [t for t in page_obj.get("texts", []) if t.get("content")]
+                text_blocks_with_content = [
+                    t for t in page_obj.get("texts", []) if t.get("content")
+                ]
                 total_texts = len(text_blocks_with_content)
 
                 # build frequency map for rounded sizes (by block count)
@@ -1153,37 +1176,58 @@ class PDFStructureExtractor:
                 # Determine rarity mode and thresholds. Modes: 'blocks', 'chars', 'both'
                 rarity_mode = os.getenv("PDF_TEXT_SIZE_RARITY_MODE", "chars").lower()
                 try:
-                    keep_ratio_block = float(os.getenv("PDF_TEXT_SIZE_KEEP_RATIO", "0.15"))
+                    keep_ratio_block = float(
+                        os.getenv("PDF_TEXT_SIZE_KEEP_RATIO", "0.15")
+                    )
                 except Exception:
                     keep_ratio_block = 0.15
                 try:
-                    keep_ratio_char = float(os.getenv("PDF_TEXT_SIZE_KEEP_RATIO_CHAR", "0.10"))
+                    keep_ratio_char = float(
+                        os.getenv("PDF_TEXT_SIZE_KEEP_RATIO_CHAR", "0.10")
+                    )
                 except Exception:
                     keep_ratio_char = 0.10
                 try:
-                    min_chars_for_rarity = int(os.getenv("PDF_TEXT_SIZE_MIN_CHARS", "30"))
+                    min_chars_for_rarity = int(
+                        os.getenv("PDF_TEXT_SIZE_MIN_CHARS", "30")
+                    )
                 except Exception:
                     min_chars_for_rarity = 30
 
                 # Decide which rounded-size keys are considered "rare" according to the selected mode.
                 rare_keys = set()
-                if total_texts >= min_texts_for_rarity or (rarity_mode == "chars" and total_chars >= min_chars_for_rarity):
+                if total_texts >= min_texts_for_rarity or (
+                    rarity_mode == "chars" and total_chars >= min_chars_for_rarity
+                ):
                     # Evaluate each ks observed on the page
                     for ks in set(list(freq.keys()) + list(freq_chars.keys())):
-                        block_ratio = freq.get(ks, 0) / float(total_texts) if total_texts > 0 else 0.0
-                        char_ratio = freq_chars.get(ks, 0) / float(total_chars) if total_chars > 0 else 0.0
+                        block_ratio = (
+                            freq.get(ks, 0) / float(total_texts)
+                            if total_texts > 0
+                            else 0.0
+                        )
+                        char_ratio = (
+                            freq_chars.get(ks, 0) / float(total_chars)
+                            if total_chars > 0
+                            else 0.0
+                        )
 
                         is_rare = False
                         if rarity_mode == "blocks":
-                            is_rare = (block_ratio < keep_ratio_block)
+                            is_rare = block_ratio < keep_ratio_block
                         elif rarity_mode == "chars":
                             # require enough chars to make a decision
                             if total_chars >= min_chars_for_rarity:
-                                is_rare = (char_ratio < keep_ratio_char)
+                                is_rare = char_ratio < keep_ratio_char
                         else:  # both
                             # mark rare only if BOTH block and char ratios are below thresholds
-                            if total_chars >= min_chars_for_rarity and total_texts >= min_texts_for_rarity:
-                                is_rare = (block_ratio < keep_ratio_block) and (char_ratio < keep_ratio_char)
+                            if (
+                                total_chars >= min_chars_for_rarity
+                                and total_texts >= min_texts_for_rarity
+                            ):
+                                is_rare = (block_ratio < keep_ratio_block) and (
+                                    char_ratio < keep_ratio_char
+                                )
 
                         if is_rare:
                             rare_keys.add(ks)
@@ -1197,12 +1241,16 @@ class PDFStructureExtractor:
                         if page_min_size is not None and s < page_min_size:
                             if not t.get("blocked"):
                                 t["blocked"] = True
-                                t["blocked_reason"] = t.get("blocked_reason") or "font_too_small"
+                                t["blocked_reason"] = (
+                                    t.get("blocked_reason") or "font_too_small"
+                                )
                             continue
                         if page_max_size is not None and s > page_max_size:
                             if not t.get("blocked"):
                                 t["blocked"] = True
-                                t["blocked_reason"] = t.get("blocked_reason") or "font_too_large"
+                                t["blocked_reason"] = (
+                                    t.get("blocked_reason") or "font_too_large"
+                                )
                             continue
 
                     # rarity check: apply per-rounded-key decision (includes NULL_KEY)
@@ -1211,8 +1259,9 @@ class PDFStructureExtractor:
                         # Only set blocked if no stronger reason already exists
                         if not t.get("blocked"):
                             t["blocked"] = True
-                            t["blocked_reason"] = t.get("blocked_reason") or "font_too_rare"
-
+                            t["blocked_reason"] = (
+                                t.get("blocked_reason") or "font_too_rare"
+                            )
 
             else:
                 # If no per-page sizes found, fall back to static env values
@@ -2490,7 +2539,12 @@ def main(
         # Generate product visualization with colored bounding boxes
         print("\n🎨 Generating product visualization...")
         try:
-            from visualize_products import draw_bounding_boxes
+            # visualize_products moved to scripts/ during repo reorg
+            try:
+                from scripts.visualize_products import draw_bounding_boxes
+            except Exception:
+                # fall back to older root path for backwards compat if present
+                from visualize_products import draw_bounding_boxes
 
             color_mapping = draw_bounding_boxes(
                 xml_path=xml_file,
@@ -2543,15 +2597,57 @@ def main(
                     total_extra = 0
                     for _p in _j.get("pages", []):
                         try:
-                            grp = _group_blocks_module.group_page(_p, threshold=thresh)
+                            # Detect page layout and use layout-aware settings for grouping
+                            try:
+                                detected_layout = _group_blocks_module.detect_page_layout(
+                                    _p
+                                )
+                            except Exception:
+                                detected_layout = "unknown"
+                            _p["_detected_layout"] = detected_layout
+
+                            # Per-layout multipliers (tune as needed)
+                            layout_thresh_mult = {
+                                "catalog_grid": 1.0,
+                                "table_grid": 1.0,
+                                "sidebar": 3.0,  # search wider horizontally for sidebars
+                                "centered_cluster": 1.0,
+                                "vertical_flow": 1.5,
+                                "horizontal_strips": 1.5,
+                                "scattered_dense": 1.5,
+                                "scattered_sparse": 1.2,
+                                "full_page_single": 2.0,
+                            }
+
+                            mult = layout_thresh_mult.get(detected_layout, 1.0)
+                            page_thresh = float(thresh) * mult
+
+                            grp = _group_blocks_module.group_page(
+                                _p, threshold=page_thresh
+                            )
                         except Exception:
                             grp = []
                         # Run the post-processing attachments stage so the grouped
                         # JSON created by the pipeline includes the same safety
                         # attachments run locally (and considers blocked images).
                         try:
-                            new_grp, extra = _group_blocks_module.attach_remaining_groups(
-                                grp, threshold=thresh, page=_p
+                            # For attachments, allow a slightly larger tolerance so blocked
+                            # elements can attach when because they are often small
+                            # Use the page-level threshold (layout-aware) as the
+                            # baseline for attachments so the attachment radius
+                            # scales consistently with grouping decisions.
+                            # Previously attach_thresh used the global `thresh`
+                            # which could be much smaller than the page_thresh
+                            # for layouts that use larger multipliers (e.g. sidebar),
+                            # leaving many nearby text-only groups unattached.
+                            attach_mult = 1.5 if detected_layout == "sidebar" else 1.2
+                            # Attach radius should be relative to the page_thresh
+                            # so that layout-aware grouping and attachment are aligned.
+                            attach_thresh = float(page_thresh) * attach_mult
+                            new_grp, extra = (
+                                _group_blocks_module.attach_remaining_groups(
+                                    grp, threshold=attach_thresh, page=_p
+                                )
                             )
                         except Exception:
                             new_grp = grp
@@ -2567,7 +2663,9 @@ def main(
                         _json.dump(_j, _f, indent=2, ensure_ascii=False)
                     print(f"✅ Grouped JSON saved: {grouped_out}")
                     if total_extra:
-                        print(f"ℹ️  Post-processor made {total_extra} extra attachments across pages")
+                        print(
+                            f"ℹ️  Post-processor made {total_extra} extra attachments across pages"
+                        )
                 except Exception as e:
                     print(f"⚠️ Failed to auto-group JSON: {e}")
             else:

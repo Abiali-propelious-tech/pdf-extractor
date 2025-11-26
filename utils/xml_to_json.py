@@ -1,27 +1,9 @@
 #!/usr/bin/env python3
 """
-Convert extractor XML to a cleaner JSON structure.
-Usage:
-  python xml_to_json.py <xml_path> [--out json_path]
-
-Output JSON schema:
-{
-  "source": "...",
-  "total_pages": 1,
-  "pages": [
-    {
-      "page_number": 1,
-      "width": 960.0,
-      "height": 540.0,
-      "images": [ {id,bbox:[x0,y0,x1,y1], width, height, file} ... ],
-      "texts": [ {id,bbox:[...], type, content, detected_type} ... ]
-    }
-  ]
-}
+Convert extractor XML to a cleaner JSON structure (moved to utils/).
 """
 import xml.etree.ElementTree as ET
 import json
-import sys
 import os
 import re
 from typing import List
@@ -109,8 +91,10 @@ def xml_to_json(xml_path: str, out_path: str = None) -> str:
 
 
 if __name__ == "__main__":
+    import sys
+
     if len(sys.argv) < 2:
-        print("Usage: python xml_to_json.py <xml_path> [--out json_path]")
+        print("Usage: python utils/xml_to_json.py <xml_path> [--out json_path]")
         sys.exit(1)
     xml_path = sys.argv[1]
     out = None
